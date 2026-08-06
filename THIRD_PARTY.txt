@@ -1,0 +1,35 @@
+# Third Party Softwares
+
+This document contains the list of Third Party Softwares along with the license information.
+
+Third Party Software may impose additional restrictions and it is the user's responsibility to ensure that they have met the licensing
+requirements of the relevant license of the Third Party Software they are using.
+
+vue-flow
+vue-flow is distributed under the terms and conditions of the Apache 2.0 License (http://www.apache.org/licenses/LICENSE-2.0)
+You may download the source code on the following website: https://github.com/bcakmakoglu/vue-flow
+
+boosted
+boosted is distributed under the terms and conditions of the MIT License (http://opensource.org/licenses/MIT)
+You may download the source code on the following website: https://github.com/Orange-OpenSource/Orange-Boosted-Bootstrap
+
+force-graph
+force-graph is distributed under the terms and conditions of the MIT License (http://opensource.org/licenses/MIT)
+You may download the source code on the following website: hhttps://github.com/vasturiano/force-graph
+
+pdfjs-dist
+pdfjs-dist is distributed under the terms and conditions of the Apache 2.0 License (http://www.apache.org/licenses/LICENSE-2.0)
+You may download the source code on the following website: https://github.com/mozilla/pdfjs-dist
+
+vue
+fastapi is distributed under the terms and conditions of the MIT License (http://opensource.org/licenses/MIT)
+You may download the source code on the following website: https://github.com/vuejs
+
+fastapi
+fastapi is distributed under the terms and conditions of the MIT License (http://opensource.org/licenses/MIT)
+You may download the source code on the following website: https://github.com/fastapi/fastapi
+
+pymongo
+pymongo is distributed under the terms and conditions of the Apache 2.0 License (http://www.apache.org/licenses/LICENSE-2.0)
+You may download the source code on the following website: https://github.com/mongodb/mongo-python-driver
+
