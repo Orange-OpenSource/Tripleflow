@@ -71,13 +71,40 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
             <div class="toolbar-right">
                 <div class="export-group">
                     <span class="export-label">Export</span>
-                    <button @click="exportJSON" :disabled="visibleTriples.length === 0" class="btn btn-sm btn-outline-secondary" title="Download filtered triples as JSON">
+                    <button
+                        @click="exportJSON"
+                        :disabled="exportableTriples.length === 0"
+                        class="btn btn-sm btn-outline-secondary"
+                        :title="exportableTriples.length === 0
+                            ? 'No validated triple to export in this view'
+                            : `Download ${exportableTriples.length} validated triple(s) as JSON`"
+                    >
                         ↓ JSON
+                        <span class="export-count">{{ exportableTriples.length }}</span>
                     </button>
-                    <button @click="exportTTL" :disabled="visibleTriples.length === 0" class="btn btn-sm btn-outline-secondary" title="Download filtered triples as Turtle/RDF">
+                    <button
+                        @click="exportTTL"
+                        :disabled="exportableTriples.length === 0"
+                        class="btn btn-sm btn-outline-secondary"
+                        :title="exportableTriples.length === 0
+                            ? 'No validated triple to export in this view'
+                            : `Download ${exportableTriples.length} validated triple(s) as Turtle/RDF`"
+                    >
                         ↓ TTL
+                        <span class="export-count">{{ exportableTriples.length }}</span>
                     </button>
                 </div>
+                <button
+                    @click="openPublishModal"
+                    :disabled="publishableTriples.length === 0"
+                    class="btn btn-sm btn-outline-secondary"
+                    :title="publishableTriples.length === 0
+                        ? 'No validated, fully-linked triple in the current view'
+                        : `Publish ${publishableTriples.length} validated triple(s) to a knowledge graph`"
+                >
+                    ↑ Publish
+                    <span class="publish-count">{{ publishableTriples.length }}</span>
+                </button>
                 <button @click="() => Promise.all([load(), loadFiles()])" :disabled="isLoading" class="btn btn-sm btn-outline-secondary">
                     ↺ Refresh
                 </button>
@@ -142,6 +169,8 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                     </li>
                 </ul>
 
+                <p v-if="renameError" class="file-rename-error">{{ renameError }}</p>
+
             </aside>
 
             <div class="table-section">
@@ -180,23 +209,29 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 </thead>
                 <tbody>
                     <template v-for="triple in visibleTriples" :key="triple.triple_id">
-                        <tr :class="['triple-row', { 'is-pending-action': pendingAction?.id === triple.triple_id }]">
+                        <tr
+                            :class="['triple-row', {
+                                'is-pending-action': pendingAction?.id === triple.triple_id,
+                                'is-selected': selectedTripleId === triple.triple_id,
+                            }]"
+                            @click="selectTriple(triple)"
+                        >
                             <td>
-                                <a v-if="entityLink(triple.subject, 'item', triple)" :href="entityLink(triple.subject, 'item', triple)" target="_blank" rel="noopener noreferrer" class="entity-link">
+                                <a v-if="entityLink(triple.subject, 'item', triple)" :href="entityLink(triple.subject, 'item', triple)" :title="entityLinkTitle(triple)" target="_blank" rel="noopener noreferrer" class="entity-link">
                                     {{ entityLabel(triple.subject) }}
                                 </a>
                                 <span v-else>{{ entityLabel(triple.subject) }}</span>
                                 <span v-if="entityId(triple.subject)" class="entity-id">{{ entityId(triple.subject) }}</span>
                             </td>
                             <td>
-                                <a v-if="entityLink(triple.predicate, 'property', triple)" :href="entityLink(triple.predicate, 'property', triple)" target="_blank" rel="noopener noreferrer" class="entity-link is-predicate">
+                                <a v-if="entityLink(triple.predicate, 'property', triple)" :href="entityLink(triple.predicate, 'property', triple)" :title="entityLinkTitle(triple)" target="_blank" rel="noopener noreferrer" class="entity-link is-predicate">
                                     {{ entityLabel(triple.predicate) }}
                                 </a>
                                 <span v-else class="is-predicate">{{ entityLabel(triple.predicate) }}</span>
                                 <span v-if="entityId(triple.predicate)" class="entity-id">{{ entityId(triple.predicate) }}</span>
                             </td>
                             <td>
-                                <a v-if="entityLink(triple.obj, 'item', triple)" :href="entityLink(triple.obj, 'item', triple)" target="_blank" rel="noopener noreferrer" class="entity-link">
+                                <a v-if="entityLink(triple.obj, 'item', triple)" :href="entityLink(triple.obj, 'item', triple)" :title="entityLinkTitle(triple)" target="_blank" rel="noopener noreferrer" class="entity-link">
                                     {{ entityLabel(triple.obj) }}
                                 </a>
                                 <span v-else>{{ entityLabel(triple.obj) }}</span>
@@ -209,7 +244,9 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                             </td>
 
                             <td class="col-actions">
-                                <div class="action-group">
+                                <!-- Acting on a triple must not toggle the source
+                                     panel's pin, which the row click controls. -->
+                                <div class="action-group" @click.stop>
                                     <button
                                         v-for="btn in actionButtons"
                                         :key="btn.status"
@@ -243,6 +280,11 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                                         <span class="extractor-dot" :style="{ background: extractorColorMap[ext] || '#000' }"></span>
                                         {{ ext }}
                                     </span>
+                                    <span
+                                        v-if="sourceFiles(triple).length > 1"
+                                        class="source-files-chip"
+                                        :title="`Found in ${sourceFiles(triple).join(', ')} — one decision covers them all`"
+                                    >{{ sourceFiles(triple).length }} docs</span>
                                 </div>
                             </td>
 
@@ -341,14 +383,17 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 <div class="text-panel-resizer" @mousedown="startResize"></div>
                 <div class="text-panel-header">
                     <span class="text-panel-title">Source text</span>
+                    <span v-if="sideSegments?.focused" class="passage-badge">
+                        Selected triple<template v-if="focusedPage"> — page {{ focusedPage }}</template>
+                    </span>
                     <div class="text-panel-controls">
-                        <div v-if="sideAnnotatedSegments" class="preview-legend">
+                        <div v-if="sideSegments" class="preview-legend">
                             <span class="legend-chip is-subject">Subject</span>
                             <span class="legend-chip is-predicate">Predicate</span>
                             <span class="legend-chip is-object">Object</span>
                         </div>
                         <button
-                            v-if="sideAnnotatedSegments"
+                            v-if="sideSegments"
                             class="preview-toggle"
                             :class="{ 'is-active': sideHighlight }"
                             @click="sideHighlight = !sideHighlight"
@@ -365,12 +410,17 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                     <div v-if="sideLoading" class="val-state">Loading...</div>
                     <div v-else-if="sideError" class="preview-state preview-state-error">{{ sideError }}</div>
                     <div v-else class="preview-content">
-                        <template v-if="sideHighlight && sideAnnotatedSegments">
+                        <template v-if="sideHighlight && sideSegments">
+                            <span>{{ sideSegments.before }}</span>
                             <span
-                                v-for="(seg, i) in sideAnnotatedSegments"
+                                ref="passageRef"
+                                :class="{ 'source-passage': sideSegments.focused }"
+                            ><span
+                                v-for="(seg, i) in sideSegments.passage"
                                 :key="i"
                                 :class="seg.role ? `hl-${seg.role}` : null"
-                            >{{ seg.text }}</span>
+                            >{{ seg.text }}</span></span>
+                            <span>{{ sideSegments.after }}</span>
                         </template>
                         <template v-else>{{ sideContent }}</template>
                     </div>
@@ -389,10 +439,16 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
 
             <div v-if="!showResetConfirm" class="danger-actions">
                 <button class="btn btn-sm btn-outline-secondary" @click="openFilesModal">
-                    🗂 Manage files
+                    <svg class="danger-btn-icon" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M837.5,275H450L375,175H100V762.5A62.5,62.5,0,0,0,162.5,825H900V337.5A62.5,62.5,0,0,0,837.5,275Z" transform="scale(.96)" fill="currentColor"/></svg>
+                    Manage files
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" @click="openAuditModal">
+                    <svg class="danger-btn-icon" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g transform="scale(.96) translate(75 75)" fill="currentColor" fill-rule="nonzero"><path d="M597.517,590.517 C590.484346,597.549917 580.945861,601.500991 571,601.500991 C561.054139,601.500991 551.515654,597.549917 544.483,590.517 L397.983,444.017 C397.962,443.995 397.943,443.973 397.922,443.952 C397.506667,443.534667 397.101667,443.108667 396.707,442.674 C396.507,442.449 396.312,442.218 396.114,441.99 C395.916,441.762 395.707,441.526 395.514,441.29 C395.275,440.998 395.048,440.7 394.814,440.404 C394.673,440.221 394.528,440.042 394.39,439.856 C394.147,439.529 393.916,439.197 393.685,438.864 C393.57,438.699 393.452,438.536 393.339,438.364 C393.109,438.022 392.892,437.675 392.674,437.327 C392.568,437.158 392.46,436.99 392.357,436.819 C392.151,436.478 391.957,436.133 391.763,435.786 C391.656,435.596 391.547,435.407 391.444,435.215 C391.27,434.889 391.104,434.56 390.944,434.23 C390.832,434.006 390.718,433.783 390.61,433.556 C390.468,433.256 390.333,432.95 390.199,432.645 C390.083,432.382 389.965,432.119 389.855,431.853 C389.745,431.587 389.637,431.308 389.532,431.034 C389.413,430.728 389.295,430.422 389.184,430.112 C389.099,429.873 389.02,429.632 388.94,429.392 C388.824,429.044 388.709,428.697 388.603,428.346 C388.539,428.133 388.481,427.919 388.421,427.706 C388.314,427.328 388.209,426.951 388.114,426.569 C388.065,426.369 388.022,426.169 387.975,425.969 C387.884,425.575 387.794,425.181 387.716,424.782 C387.675,424.582 387.643,424.373 387.606,424.169 C387.536,423.776 387.465,423.384 387.406,422.988 C387.371,422.751 387.346,422.514 387.316,422.277 C387.269,421.912 387.216,421.548 387.184,421.177 C387.153,420.863 387.135,420.548 387.112,420.234 C387.091,419.934 387.064,419.647 387.049,419.351 C387.019,418.733 387.002,418.115 387.002,417.497 L387.002,142.497 C387.002,121.786322 403.791322,104.997 424.502,104.997 C445.212678,104.997 462.002,121.786322 462.002,142.497 L462.002,401.967 L597.517,537.483 C604.549917,544.515654 608.500991,554.054139 608.500991,564 C608.500991,573.945861 604.549917,583.484346 597.517,590.517 L597.517,590.517 Z M425,0 C659.721,0 850,190.279 850,425 C850,659.721 659.721,850 425,850 C190.279,850 0,659.721 0,425 C0,190.279 190.279,0 425,0 Z M425,75 C231.7,75 75,231.7 75,425 C75,618.3 231.7,775 425,775 C618.3,775 775,618.3 775,425 C775,231.7 618.3,75 425,75 Z"/></g></svg>
+                    Audit log
                 </button>
                 <button class="btn btn-sm btn-danger-outline" @click="requestReset">
-                    🗑 Clear database
+                    <svg class="danger-btn-icon" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M750,149.959H625V125a50,50,0,0,0-50-50H425a50,50,0,0,0-50,50v24.959H250a75,75,0,0,0-75,75V275H825V224.959A75,75,0,0,0,750,149.959ZM425,125H575v24.959H425V125ZM225,299.959V925H775V299.959H225ZM375,400V824.865h0c0,0.045,0,.09,0,0.135a25,25,0,0,1-50,0c0-.045,0-0.09,0-0.135h0V400h0c0-.014,0-0.027,0-0.041a25,25,0,0,1,50,0c0,0.014,0,.027,0,0.041h0Zm150,0V824.864h0c0,0.046,0,.09,0,0.136a25,25,0,0,1-50,0c0-.046,0-0.09,0-0.136h0V400h0c0-.014,0-0.028,0-0.041a25,25,0,0,1,50,0c0,0.013,0,.027,0,0.041h0Zm150,0V824.865h0c0,0.045,0,.09,0,0.135a25,25,0,0,1-50,0c0-.045,0-0.09,0-0.135h0V400h0c0-.014,0-0.027,0-0.041a25,25,0,0,1,50,0c0,0.014,0,.027,0,0.041h0Z" transform="scale(.96)" fill="currentColor"/></svg>
+                    Clear database
                 </button>
                 <span v-if="reviewerNameMissing" class="danger-name-missing">
                     Le champ « Reviewer » (en haut) est manquant.
@@ -432,6 +488,83 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 </div>
             </div>
         </section>
+
+        <div v-if="showPublishModal" class="files-modal-overlay" @click.self="closePublishModal">
+            <div class="files-modal" role="dialog" aria-modal="true" aria-label="Publish to a knowledge graph">
+                <div class="files-modal-header">
+                    <h2 class="files-modal-title">Publish to a knowledge graph</h2>
+                    <button class="preview-close" @click="closePublishModal" aria-label="Close">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                    </button>
+                </div>
+
+                <p v-if="sinksLoadError" class="files-modal-warning">
+                    Targets could not be loaded ({{ sinksLoadError }}).
+                </p>
+                <p v-else-if="!sinksLoading && availableSinks.length === 0" class="files-modal-warning">
+                    No target registered yet. Add one on the Targets page first.
+                </p>
+
+                <template v-if="availableSinks.length > 0">
+                    <label class="publish-field-label" for="publish-sink">Target</label>
+                    <select id="publish-sink" v-model="selectedSinkId" class="form-select form-select-sm">
+                        <option v-for="sink in availableSinks" :key="sink.id" :value="sink.id">
+                            {{ sink.label || sink.id }}
+                        </option>
+                    </select>
+                    <p class="publish-target-url">{{ selectedSinkUrl }}</p>
+
+                    <p class="publish-summary">
+                        <strong>{{ publishableTriples.length }} validated triple(s)</strong> from the current view
+                        will be inserted. Re-publishing the same triple is harmless — an
+                        <code>INSERT DATA</code> leaves the graph unchanged.
+                    </p>
+                    <p v-if="skippedInViewCount > 0" class="publish-skipped-note">
+                        {{ skippedInViewCount }} triple(s) in this view are not publishable (not validated, or
+                        missing a Q/P identifier) and are left out.
+                    </p>
+
+                    <div class="publish-actions">
+                        <button
+                            class="btn btn-sm btn-outline-secondary"
+                            :disabled="isPublishing || isPreviewing"
+                            @click="previewPublish"
+                        >
+                            {{ isPreviewing ? 'Building…' : 'Preview SPARQL' }}
+                        </button>
+                        <button
+                            class="btn btn-sm btn-primary"
+                            :disabled="isPublishing || isPreviewing"
+                            @click="runPublish"
+                        >
+                            {{ isPublishing ? 'Publishing…' : `Publish ${publishableTriples.length} triple(s)` }}
+                        </button>
+                    </div>
+
+                    <span v-if="publishError" class="action-error">{{ publishError }}</span>
+
+                    <p v-if="publishDoneMessage" class="reset-done">{{ publishDoneMessage }}</p>
+
+                    <div v-if="previewSparql" class="publish-preview">
+                        <p class="publish-preview-title">SPARQL that would be sent</p>
+                        <pre class="publish-preview-body">{{ previewSparql }}</pre>
+                    </div>
+
+                    <div v-if="previewRequests.length > 0" class="publish-preview">
+                        <p class="publish-preview-title">
+                            Calls that would be sent ({{ previewRequests.length }})
+                        </p>
+                        <pre class="publish-preview-body">{{ previewRequestsText }}</pre>
+                    </div>
+
+                    <ul v-if="publishSkipped.length > 0" class="publish-skipped-list">
+                        <li v-for="item in publishSkipped" :key="item.triple_id">
+                            <code>{{ item.triple_id }}</code> — {{ item.reason }}
+                        </li>
+                    </ul>
+                </template>
+            </div>
+        </div>
 
         <div v-if="showFilesModal" class="files-modal-overlay" @click.self="showFilesModal = false">
             <div class="files-modal" role="dialog" aria-modal="true" aria-label="Manage files">
@@ -474,9 +607,53 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                             class="btn btn-sm btn-danger-outline"
                             :disabled="!reviewerName.trim()"
                             @click="pendingFileDeleteId = f.file_id"
-                        >🗑 Delete</button>
+                        >
+                            <svg class="danger-btn-icon" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M750,149.959H625V125a50,50,0,0,0-50-50H425a50,50,0,0,0-50,50v24.959H250a75,75,0,0,0-75,75V275H825V224.959A75,75,0,0,0,750,149.959ZM425,125H575v24.959H425V125ZM225,299.959V925H775V299.959H225ZM375,400V824.865h0c0,0.045,0,.09,0,0.135a25,25,0,0,1-50,0c0-.045,0-0.09,0-0.135h0V400h0c0-.014,0-0.027,0-0.041a25,25,0,0,1,50,0c0,0.014,0,.027,0,0.041h0Zm150,0V824.864h0c0,0.046,0,.09,0,0.136a25,25,0,0,1-50,0c0-.046,0-0.09,0-0.136h0V400h0c0-.014,0-0.028,0-0.041a25,25,0,0,1,50,0c0,0.013,0,.027,0,0.041h0Zm150,0V824.865h0c0,0.045,0,.09,0,0.135a25,25,0,0,1-50,0c0-.045,0-0.09,0-0.135h0V400h0c0-.014,0-0.027,0-0.041a25,25,0,0,1,50,0c0,0.014,0,.027,0,0.041h0Z" transform="scale(.96)" fill="currentColor"/></svg>
+                            Delete
+                        </button>
                     </li>
                 </ul>
+            </div>
+        </div>
+
+        <div v-if="showAuditModal" class="files-modal-overlay" @click.self="showAuditModal = false">
+            <div class="files-modal" role="dialog" aria-modal="true" aria-label="Audit log">
+                <div class="files-modal-header">
+                    <h2 class="files-modal-title">Audit log</h2>
+                    <button class="preview-close" @click="showAuditModal = false" aria-label="Close">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                    </button>
+                </div>
+
+                <p class="files-modal-warning audit-disclaimer">
+                    The reviewer name is typed by hand and not authenticated — treat it as a
+                    declaration, not as proof of identity.
+                </p>
+                <span v-if="auditError" class="action-error">{{ auditError }}</span>
+
+                <ul class="files-modal-list">
+                    <li v-if="auditLoading" class="files-modal-empty">Loading…</li>
+                    <li v-else-if="auditEntries.length === 0" class="files-modal-empty">
+                        Nothing recorded yet.
+                    </li>
+                    <li v-for="entry in auditEntries" :key="entry._id" class="files-modal-row audit-row">
+                        <div class="files-modal-info">
+                            <span class="audit-line">
+                                <span :class="['audit-action', `audit-action-${entry.action}`]">
+                                    {{ auditActionLabel(entry.action) }}
+                                </span>
+                                <span class="files-modal-name">{{ entry.user_name || 'unknown' }}</span>
+                            </span>
+                            <span class="files-modal-meta">{{ auditDetail(entry) }}</span>
+                        </div>
+                        <span class="audit-date">{{ formatDate(entry.timestamp) }}</span>
+                    </li>
+                </ul>
+
+                <p v-if="auditMaxEntries" class="audit-cap-note">
+                    Only the {{ auditMaxEntries }} most recent entries are kept — older ones are
+                    dropped as new ones arrive, and anything past one year expires on its own.
+                </p>
             </div>
         </div>
     </main>
@@ -492,19 +669,20 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
 import { computed, inject, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import Badge from '../components/atoms/Badge.vue'
 import EntitySearch from '../components/molecules/EntitySearch.vue'
-import { clearDatabase, deleteFile, fetchFiles, fetchFileContent, fetchFileTriples, fetchTriples, renameFile, submitValidation } from '../composables/validation/api.js'
+import { clearDatabase, deleteFile, fetchAuditLog, fetchFiles, fetchFileContent, fetchFileTriples, fetchTriples, renameFile, submitValidation } from '../composables/validation/api.js'
 import { isNullLikeEntityValue, ENTITY_PLACEHOLDER } from '../composables/entity.js'
-import { buildEntityLink, WIKIDATA_BASE_URL } from '../composables/entityLinks.js'
+import { buildEntityLink, buildSinkEntityLink } from '../composables/entityLinks.js'
+import { publishToSink } from '../composables/sinks/api.js'
+import { useSinks } from '../composables/sinks/useSinks.js'
 
 const ALL_STATUSES = ['pending', 'validated', 'rejected', 'needs_review']
 
-const LOCAL_NAMES_KEY = 'tripleflow-file-names'
 const vFocus = { mounted: (el) => el.focus() }
 
 const triples = ref([])
 const files = ref([])
 const renamingFileId = ref(null)
-const localFileNames = ref(JSON.parse(localStorage.getItem(LOCAL_NAMES_KEY) || '{}'))
+const renameError = ref('')
 const isLoading = ref(false)
 const error = ref('')
 const activeFilter = ref('pending')
@@ -517,6 +695,23 @@ const isSubmitting = ref(false)
 const actionError = ref('')
 const reviewerNameMissing = ref(false)
 
+const {
+    availableSinks,
+    isLoading: sinksLoading,
+    loadError: sinksLoadError,
+    loadSinks,
+} = useSinks()
+
+const showPublishModal = ref(false)
+const selectedSinkId = ref('')
+const isPublishing = ref(false)
+const isPreviewing = ref(false)
+const publishError = ref('')
+const publishDoneMessage = ref('')
+const previewSparql = ref('')
+const previewRequests = ref([])
+const publishSkipped = ref([])
+
 const showResetConfirm = ref(false)
 const resetConfirmText = ref('')
 const isResetting = ref(false)
@@ -528,11 +723,22 @@ const pendingFileDeleteId = ref(null)
 const deletingFileId = ref(null)
 const fileDeleteError = ref('')
 
+const showAuditModal = ref(false)
+const auditEntries = ref([])
+const auditMaxEntries = ref(null)
+const auditLoading = ref(false)
+const auditError = ref('')
+
 const sideContent = ref('')
+const sideContentFileId = ref(null)
 const sideLoading = ref(false)
 const sideError = ref('')
 const sidePanelVisible = ref(false)
 const sideHighlight = ref(true)
+// Triple whose source passage the panel is pinned to. Null means "show the whole
+// document with every extracted entity highlighted".
+const selectedTripleId = ref(null)
+const passageRef = ref(null)
 const panelWidth = ref(384)
 const isDragging = ref(false)
 const dragStartX = ref(0)
@@ -577,11 +783,12 @@ const actionButtons = [
 
 /** Returns the display name for a file, using the local override if one exists. */
 function getDisplayName(f) {
-    return localFileNames.value[f.file_id] ?? f.file_name
+    return f.file_name
 }
 
 /** Enters rename mode for a file. */
 function startRename(f) {
+    renameError.value = ''
     renamingFileId.value = f.file_id
 }
 
@@ -593,22 +800,23 @@ function withExtension(newName, originalName) {
     return newName.endsWith(ext) ? newName : newName + ext
 }
 
-/** Saves the new name to MongoDB, updates localStorage as cache, and exits rename mode. */
+/** Saves the new name to MongoDB and exits rename mode. */
 async function confirmRename(f, newName) {
     const trimmed = withExtension(newName.trim(), f.file_name)
     renamingFileId.value = null
+    renameError.value = ''
 
-    if (!trimmed || trimmed === getDisplayName(f)) return
-
-    localFileNames.value = { ...localFileNames.value, [f.file_id]: trimmed }
-    localStorage.setItem(LOCAL_NAMES_KEY, JSON.stringify(localFileNames.value))
+    if (!trimmed || trimmed === f.file_name) return
 
     try {
         await renameFile(f.file_id, trimmed)
         const target = files.value.find((file) => file.file_id === f.file_id)
         if (target) target.file_name = trimmed
-    } catch {
-        // keep the local override even if the backend call fails
+    } catch (e) {
+        // The name lives in the database, shared by every reviewer. A failure
+        // means nothing was renamed — better said out loud than papered over
+        // with a label only this browser would ever see.
+        renameError.value = e.message || 'Rename failed.'
     }
 }
 
@@ -625,12 +833,26 @@ function entityId(part) {
 }
 
 /**
- * Returns a link for a triple part, targeting the knowledge base declared by the extractor
- * that produced it, or an empty string when there is no declared alignment or the ID is not
- * a valid Q###/P### identifier.
+ * Returns a link for a triple part. A triple that has already been published points at the
+ * target's knowledge base — that is where the identifier now lives, and the reviewer can
+ * check what landed. Otherwise it points at the base declared by the extractor that
+ * produced it. Empty string when neither declares an alignment, or when the ID is not a
+ * valid Q###/P### identifier.
  */
 function entityLink(part, type, triple) {
-    return buildEntityLink(entityId(part), type, getExtractors(triple)[0])
+    const id = entityId(part)
+    return buildSinkEntityLink(id, type, triple?.published?.sink_id)
+        || buildEntityLink(id, type, getExtractors(triple)[0])
+}
+
+/** Explains where an entity link goes, since published triples point at the target instead. */
+function entityLinkTitle(triple) {
+    const sinkId = triple?.published?.sink_id
+    if (sinkId && buildSinkEntityLink('Q1', 'item', sinkId)) {
+        const sink = availableSinks.value.find(s => s.id === sinkId)
+        return `Published to ${sink?.label || sinkId} — open it there`
+    }
+    return ''
 }
 
 /**
@@ -730,6 +952,125 @@ const visibleTriples = computed(() => {
     if (activeFilter.value === 'all') return filteredByExtractor.value
     return filteredByExtractor.value.filter(t => t.status === activeFilter.value)
 })
+
+const ITEM_ID_RE = /^Q\d+$/i
+const PROPERTY_ID_RE = /^P\d+$/i
+
+/**
+ * Returns true when a triple can be expressed in a target graph: it must be validated,
+ * and all three parts must carry a Q/P identifier. Mirrors the rule the backend enforces
+ * in /sinks/{id}/publish — which stays the authority; this only drives the UI count.
+ */
+function isPublishable(triple) {
+    return triple.status === 'validated'
+        && ITEM_ID_RE.test(entityId(triple.subject))
+        && PROPERTY_ID_RE.test(entityId(triple.predicate))
+        && ITEM_ID_RE.test(entityId(triple.obj))
+}
+
+const publishableTriples = computed(() => visibleTriples.value.filter(isPublishable))
+
+/**
+ * What the TTL and JSON buttons download: the validated triples of the current
+ * scope (source file, extractor). Deliberately not tied to the status tab —
+ * exporting is the end of the review, so landing on the default "pending" tab
+ * must not turn the buttons into a download of triples nobody approved.
+ */
+const exportableTriples = computed(
+    () => filteredByExtractor.value.filter(t => t.status === 'validated')
+)
+
+const skippedInViewCount = computed(() => visibleTriples.value.length - publishableTriples.value.length)
+
+const selectedSinkUrl = computed(() => {
+    const sink = availableSinks.value.find(s => s.id === selectedSinkId.value)
+    if (!sink) return ''
+    return sink.graph_uri ? `${sink.update_url} → graph ${sink.graph_uri}` : `${sink.update_url} → default graph`
+})
+
+/** Clears any result from a previous publish attempt. */
+function resetPublishFeedback() {
+    publishError.value = ''
+    publishDoneMessage.value = ''
+    previewSparql.value = ''
+    previewRequests.value = []
+    publishSkipped.value = []
+}
+
+/** Opens the publish modal, loading the target list on first use. Requires a reviewer name. */
+async function openPublishModal() {
+    if (!reviewerName.value.trim()) {
+        reviewerNameMissing.value = true
+        return
+    }
+    reviewerNameMissing.value = false
+    resetPublishFeedback()
+    showPublishModal.value = true
+
+    await loadSinks()
+    if (!availableSinks.value.some(s => s.id === selectedSinkId.value)) {
+        selectedSinkId.value = availableSinks.value[0]?.id || ''
+    }
+}
+
+function closePublishModal() {
+    showPublishModal.value = false
+    resetPublishFeedback()
+}
+
+/**
+ * Renders the calls a dry run would send, for a target written through its own
+ * API. Shown as-is so the reviewer can compare them against that API's docs.
+ */
+const previewRequestsText = computed(() => previewRequests.value
+    .map(call => `${call.method} ${call.url}\n${call.body}`)
+    .join('\n\n'))
+
+/** Asks the backend to build the request(s) without sending them, so the reviewer can inspect them. */
+async function previewPublish() {
+    isPreviewing.value = true
+    resetPublishFeedback()
+
+    try {
+        const result = await publishToSink({
+            sinkId: selectedSinkId.value,
+            tripleIds: publishableTriples.value.map(t => t.triple_id),
+            userName: reviewerName.value.trim(),
+            dryRun: true,
+        })
+        previewRequests.value = result.requests || []
+        // A SPARQL target answers with an update; an HTTP one with the calls.
+        previewSparql.value = result.requests
+            ? ''
+            : (result.sparql || 'Nothing to insert.')
+        publishSkipped.value = result.skipped || []
+    } catch (err) {
+        publishError.value = err.message || 'Failed to build the request.'
+    } finally {
+        isPreviewing.value = false
+    }
+}
+
+/** Inserts the validated triples into the selected target, then refreshes the list. */
+async function runPublish() {
+    isPublishing.value = true
+    resetPublishFeedback()
+
+    try {
+        const result = await publishToSink({
+            sinkId: selectedSinkId.value,
+            tripleIds: publishableTriples.value.map(t => t.triple_id),
+            userName: reviewerName.value.trim(),
+        })
+        publishDoneMessage.value = `${result.published_count} triple(s) published.`
+        publishSkipped.value = result.skipped || []
+        await load()
+    } catch (err) {
+        publishError.value = err.message || 'Failed to publish the triples.'
+    } finally {
+        isPublishing.value = false
+    }
+}
 
 
 /** Returns true if the given triple/status combination is currently awaiting confirmation. */
@@ -860,7 +1201,7 @@ function annotateText(text, triples) {
             terms.push({ label, role })
         }
     }
-    if (terms.length === 0) return null
+    if (terms.length === 0) return [{ text, role: null }]
     terms.sort((a, b) => b.label.length - a.label.length)
     const pattern = terms
         .map(t => t.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -872,31 +1213,154 @@ function annotateText(text, triples) {
     }))
 }
 
-const sideAnnotatedSegments = computed(() => {
-    if (!sideContent.value || triples.value.length === 0) return null
-    return annotateText(sideContent.value, triples.value)
+/**
+ * Distinct documents a triple was found in. A triple several documents agree on
+ * is a single row, so without this the reviewer filtering on one of them has no
+ * way of telling that the decision they are about to take covers the others too.
+ */
+function sourceFiles(triple) {
+    const names = new Set()
+
+    for (const occurrence of triple?.source?.occurrences ?? []) {
+        if (occurrence?.file_name) names.add(occurrence.file_name)
+    }
+
+    if (names.size === 0 && triple?.source?.file_name) {
+        names.add(triple.source.file_name)
+    }
+
+    return [...names]
+}
+
+/**
+ * Returns where a triple was extracted from within the document currently shown
+ * in the panel: the chunk offsets recorded at extraction time. Prefers an
+ * occurrence from that very document, since a triple several documents agree on
+ * carries one occurrence per document.
+ */
+function tripleOccurrence(triple, fileId) {
+    const occurrences = triple?.source?.occurrences
+    if (!Array.isArray(occurrences) || occurrences.length === 0) return null
+
+    const inFile = occurrences.find(o => o?.file_id === fileId)
+    const occurrence = inFile ?? (fileId ? null : occurrences[0])
+    if (!occurrence) return null
+
+    const { start, end } = occurrence
+    return Number.isInteger(start) && Number.isInteger(end) && end > start ? occurrence : null
+}
+
+/** The passage the selected triple came from, clamped to the text actually loaded. */
+const focusedOccurrence = computed(() => {
+    if (!selectedTriple.value || !sideContent.value) return null
+
+    const occurrence = tripleOccurrence(selectedTriple.value, selectedFileId.value)
+    if (!occurrence) return null
+
+    const start = Math.min(occurrence.start, sideContent.value.length)
+    const end = Math.min(occurrence.end, sideContent.value.length)
+    return end > start ? { ...occurrence, start, end } : null
 })
+
+/**
+ * Segments of the source text to render, split around the passage the selected
+ * triple was extracted from. Without a selection — or for a triple extracted
+ * before offsets were recorded — the whole text is annotated instead, so every
+ * extracted entity still stands out.
+ */
+const sideSegments = computed(() => {
+    if (!sideContent.value) return null
+
+    const occurrence = focusedOccurrence.value
+
+    if (occurrence) {
+        return {
+            focused: true,
+            before: sideContent.value.slice(0, occurrence.start),
+            passage: annotateText(
+                sideContent.value.slice(occurrence.start, occurrence.end),
+                [selectedTriple.value]
+            ),
+            after: sideContent.value.slice(occurrence.end),
+        }
+    }
+
+    if (triples.value.length === 0) return null
+
+    return {
+        focused: false,
+        before: '',
+        passage: annotateText(sideContent.value, triples.value),
+        after: '',
+    }
+})
+
+/** Page the selected triple was extracted from, when the document has pages. */
+const focusedPage = computed(() => focusedOccurrence.value?.page ?? null)
+
+/** Loads a document's stored text into the side panel. */
+async function loadSourceText(fileId) {
+    sideLoading.value = true
+    sideError.value = ''
+    try {
+        sideContent.value = await fetchFileContent(fileId)
+        sideContentFileId.value = fileId
+    } catch (e) {
+        sideContent.value = ''
+        sideContentFileId.value = null
+        sideError.value = e.message
+    } finally {
+        sideLoading.value = false
+    }
+}
 
 /** Switches the active file filter and reloads triples for the selected file (or all files if null). */
 async function selectFile(fileId) {
     selectedFileId.value = fileId
     selectedExtractor.value = null
+    selectedTripleId.value = null
     await load()
     if (fileId) {
         sidePanelVisible.value = true
-        sideLoading.value = true
-        sideError.value = ''
-        try {
-            sideContent.value = await fetchFileContent(fileId)
-        } catch (e) {
-            sideError.value = e.message
-        } finally {
-            sideLoading.value = false
-        }
+        await loadSourceText(fileId)
     } else {
         sidePanelVisible.value = false
         sideContent.value = ''
+        sideContentFileId.value = null
     }
+}
+
+/** The triple the source panel is pinned to, if it is still in the current view. */
+const selectedTriple = computed(
+    () => visibleTriples.value.find(t => t.triple_id === selectedTripleId.value) ?? null
+)
+
+/**
+ * Pins the source panel to the passage a triple was extracted from, opening the
+ * document it came from when the reviewer is looking at all files at once.
+ * Clicking the same row again unpins it.
+ */
+async function selectTriple(triple) {
+    if (selectedTripleId.value === triple.triple_id) {
+        selectedTripleId.value = null
+        return
+    }
+
+    selectedTripleId.value = triple.triple_id
+
+    const occurrence = tripleOccurrence(triple, selectedFileId.value)
+    const fileId = occurrence?.file_id || selectedFileId.value || triple.source?.file_id
+
+    if (!fileId) return
+
+    sidePanelVisible.value = true
+
+    if (sideContentFileId.value !== fileId) {
+        await loadSourceText(fileId)
+    }
+
+    await nextTick()
+    passageRef.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 
 /** Fetches triples from the API for the currently selected file (or all files). */
@@ -981,6 +1445,49 @@ function openFilesModal() {
     showFilesModal.value = true
 }
 
+const AUDIT_ACTION_LABELS = {
+    delete_file: 'File deleted',
+    clear_database: 'Database cleared',
+    publish: 'Published',
+}
+
+/** Human-readable label for an audit action, falling back to the raw value if unknown. */
+function auditActionLabel(action) {
+    return AUDIT_ACTION_LABELS[action] || (action || '').replace(/_/g, ' ')
+}
+
+/** One-line summary of what an audit entry actually did, per action type. */
+function auditDetail(entry) {
+    if (entry.action === 'delete_file') {
+        const name = entry.file_name || entry.file_id || 'unknown file'
+        return `${name} — ${entry.triples_deleted ?? 0} triple(s) deleted`
+    }
+    if (entry.action === 'clear_database') {
+        return `${entry.files_deleted ?? 0} file(s) and ${entry.triples_deleted ?? 0} triple(s) deleted`
+    }
+    if (entry.action === 'publish') {
+        const skipped = entry.skipped_count ? `, ${entry.skipped_count} skipped` : ''
+        return `${entry.published_count ?? 0} triple(s) to '${entry.sink_id}'${skipped}`
+    }
+    return ''
+}
+
+/** Opens the audit log modal and (re)loads its entries. No reviewer name needed to read. */
+async function openAuditModal() {
+    showAuditModal.value = true
+    auditLoading.value = true
+    auditError.value = ''
+    try {
+        const { entries, max_entries } = await fetchAuditLog()
+        auditEntries.value = entries
+        auditMaxEntries.value = max_entries
+    } catch (e) {
+        auditError.value = e.message
+    } finally {
+        auditLoading.value = false
+    }
+}
+
 /** Deletes a single file (and its triples) after confirmation, then refreshes the view. */
 async function confirmFileDelete(fileId) {
     if (!reviewerName.value.trim()) {
@@ -1006,16 +1513,17 @@ async function confirmFileDelete(fileId) {
 }
 
 onMounted(async () => {
-    await Promise.all([load(), loadFiles()])
+    // Targets are loaded up front, not only when the publish modal opens: an already
+    // published triple needs its target's knowledge base to build its entity links.
+    await Promise.all([load(), loadFiles(), loadSinks()])
 })
 
 
 /** Builds a descriptive export filename that includes the active status and extractor/file filters. */
 function buildExportFilename(ext) {
-    const status = activeFilter.value === 'all' ? 'all' : activeFilter.value
     const extractor = selectedExtractor.value ? `_${selectedExtractor.value}` : ''
     const file = selectedFileId.value ? `_file${selectedFileId.value}` : ''
-    return `triples_${status}${extractor}${file}.${ext}`
+    return `triples_validated${extractor}${file}.${ext}`
 }
 
 /** Triggers a browser download of the given content string as a named file. */
@@ -1029,9 +1537,9 @@ function downloadBlob(content, filename, mime) {
     URL.revokeObjectURL(url)
 }
 
-/** Exports the currently visible triples as a JSON file. */
+/** Exports the validated triples of the current scope as a JSON file. */
 function exportJSON() {
-    const data = visibleTriples.value.map(t => ({
+    const data = exportableTriples.value.map(t => ({
         triple_id: t.triple_id,
         subject: { label: entityLabel(t.subject), id: entityId(t.subject) || null },
         predicate: { label: entityLabel(t.predicate), id: entityId(t.predicate) || null },
@@ -1049,27 +1557,32 @@ function exportJSON() {
     downloadBlob(JSON.stringify(data, null, 2), buildExportFilename('json'), 'application/json')
 }
 
-// Base URI used for wd:/wdt: prefixes in TTL exports. Instance-specific bases
-// (e.g. an internal Wikibase) belong in the VITE_TTL_BASE_URL env var.
-const TTL_BASE = import.meta.env.VITE_TTL_BASE_URL || WIKIDATA_BASE_URL
+// RDF namespaces the exported identifiers live in. These are the real Wikidata
+// ones — the same the backend publishes with, so a downloaded file and a graph
+// populated through a sink name the very same entities. A deployment grounded in
+// a private Wikibase points them at that instance's RDF bases (not its /wiki/
+// page URLs, which are web pages rather than entity identifiers).
+const TTL_ITEM_BASE = import.meta.env.VITE_TTL_ITEM_BASE_URI || 'http://www.wikidata.org/entity/'
+const TTL_PROPERTY_BASE = import.meta.env.VITE_TTL_PROPERTY_BASE_URI || 'http://www.wikidata.org/prop/direct/'
 
 /**
- * Exports the currently visible triples as a Turtle/RDF file.
+ * Exports the validated triples of the current scope as a Turtle/RDF file.
  * Uses wd:/wdt: prefixes for valid Wikidata-style IDs; falls back to commented-out lines for unresolved entities.
  */
 function exportTTL() {
+    const exported = exportableTriples.value
     const lines = [
-        `@prefix wd: <${TTL_BASE}Item:> .`,
-        `@prefix wdt: <${TTL_BASE}Property:> .`,
-        `@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .`,
-        `@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .`,
+        '# Change the two prefixes below to ingest these triples into another',
+        '# knowledge base. The Q/P identifiers stay the same whatever you choose.',
+        `@prefix wd: <${TTL_ITEM_BASE}> .`,
+        `@prefix wdt: <${TTL_PROPERTY_BASE}> .`,
         '',
-        `# Exported ${visibleTriples.value.length} triple(s) — status: ${activeFilter.value}`,
+        `# Exported ${exported.length} validated triple(s)`,
         `# Date: ${new Date().toISOString()}`,
         '',
     ]
 
-    for (const t of visibleTriples.value) {
+    for (const t of exported) {
         const sId = entityId(t.subject)
         const pId = entityId(t.predicate)
         const oId = entityId(t.obj)
@@ -1252,6 +1765,87 @@ function exportTTL() {
     font-weight: 700;
     white-space: nowrap;
     margin-right: 0.15rem;
+}
+
+.export-count,
+.publish-count {
+    display: inline-block;
+    min-width: 1.25rem;
+    margin-left: 0.25rem;
+    padding: 0 0.25rem;
+    border-radius: 0.6rem;
+    background: var(--ods-gray-300);
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.publish-field-label {
+    display: block;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.125em;
+    color: var(--ods-gray-500);
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.publish-target-url {
+    font-size: 0.75rem;
+    color: var(--ods-gray-500);
+    margin: 0.35rem 0 0;
+    overflow-wrap: anywhere;
+}
+
+.publish-summary {
+    margin: 1rem 0 0;
+    font-size: 0.9rem;
+}
+
+.publish-skipped-note {
+    margin: 0.35rem 0 0;
+    font-size: 0.8rem;
+    color: #8a6d00;
+}
+
+.publish-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+.publish-preview {
+    margin-top: 1rem;
+}
+
+.publish-preview-title {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.125em;
+    color: var(--ods-gray-500);
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.publish-preview-body {
+    max-height: 14rem;
+    overflow: auto;
+    margin: 0;
+    padding: 0.75rem;
+    border: 0.0625rem solid var(--ods-gray-300);
+    border-radius: 0.25rem;
+    background: #f6f6f6;
+    font-size: 0.75rem;
+}
+
+.publish-skipped-list {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0 0;
+    max-height: 8rem;
+    overflow: auto;
+    font-size: 0.75rem;
+    color: var(--ods-gray-500);
 }
 
 .reviewer-label {
@@ -1454,6 +2048,13 @@ function exportTTL() {
     font-style: italic;
 }
 
+.file-rename-error {
+    margin: 0.5rem 0 0;
+    padding: 0 1rem;
+    font-size: 0.6875rem;
+    color: var(--ods-red-dark);
+}
+
 .table-section {
     flex: 1;
     min-width: 0;
@@ -1493,12 +2094,25 @@ function exportTTL() {
     color: var(--ods-black-900);
 }
 
+.triple-row {
+    cursor: pointer;
+}
+
 .triple-row:hover td {
     background: var(--ods-gray-200);
 }
 
 .triple-row.is-pending-action td {
     background: var(--ods-gray-200);
+}
+
+/* Row pinned in the source panel. */
+.triple-row.is-selected td {
+    background: var(--ods-gray-100);
+}
+
+.triple-row.is-selected td:first-child {
+    box-shadow: inset 0.1875rem 0 0 var(--ods-orange-100);
 }
 
 .entity-link {
@@ -1840,6 +2454,21 @@ span.is-predicate {
     color: var(--ods-gray-700);
 }
 
+/* Marks a row backed by more than one source document. */
+.source-files-chip {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.125rem 0.35rem;
+    border-radius: 0.25rem;
+    border: 0.0625rem solid var(--ods-gray-300);
+    color: var(--ods-gray-500);
+    cursor: help;
+}
+
 .extractor-dot {
     width: 0.5rem;
     height: 0.5rem;
@@ -2024,6 +2653,31 @@ span.is-predicate {
     background: rgba(34, 135, 34, 0.15);
     border-bottom: 0.15rem solid var(--ods-green-dark);
     border-radius: 0.15rem;
+}
+
+/* The passage the selected triple was extracted from: everything outside it is
+   dimmed, so the reviewer's eye lands on the source of the row they clicked. */
+.source-passage {
+    background: var(--ods-gray-100);
+    box-shadow: inset 0.15rem 0 0 var(--ods-orange-100);
+    border-radius: 0.15rem;
+    padding: 0.125rem 0 0.125rem 0.375rem;
+}
+
+.preview-content:has(.source-passage) > span:not(.source-passage) {
+    color: var(--ods-gray-500);
+}
+
+.passage-badge {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ods-orange-100);
+    border: 0.0625rem solid var(--ods-orange-100);
+    border-radius: 0.75rem;
+    padding: 0.0625rem 0.5rem;
+    white-space: nowrap;
 }
 
 @media (max-width: 1200px) {
@@ -2283,5 +2937,68 @@ span.is-predicate {
     gap: 0.5rem;
     font-size: 0.8rem;
     flex-shrink: 0;
+}
+
+/* Solaris icons sit on a 960 grid, so they need an explicit box and a baseline nudge
+   to line up with the button label rather than sinking below it. */
+.danger-btn-icon {
+    width: 1rem;
+    height: 1rem;
+    vertical-align: -0.15em;
+    margin-right: 0.3rem;
+}
+
+/* The audit disclaimer is a caveat, not an error: it reuses the warning's layout
+   but stays neutral so it does not read as something having gone wrong. */
+.audit-disclaimer {
+    color: var(--ods-gray-700);
+}
+
+.audit-row {
+    align-items: flex-start;
+}
+
+.audit-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.audit-action {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 0.2rem;
+    background: var(--ods-gray-300);
+    color: var(--ods-black-900);
+    white-space: nowrap;
+}
+
+.audit-action-delete_file,
+.audit-action-clear_database {
+    background: var(--ods-red-dark);
+    color: var(--ods-white-100);
+}
+
+.audit-action-publish {
+    background: var(--ods-orange-100);
+    color: var(--ods-black-900);
+}
+
+.audit-date {
+    font-size: 0.75rem;
+    color: var(--ods-gray-700);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.audit-cap-note {
+    font-size: 0.75rem;
+    color: var(--ods-gray-700);
+    margin: 0.75rem 0 0;
+    padding-top: 0.75rem;
+    border-top: 0.0625rem solid var(--ods-gray-300);
 }
 </style>

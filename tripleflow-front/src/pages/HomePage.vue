@@ -38,6 +38,10 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                         @update:extractors="updateExtractors"
                         :files="selectedFiles"
                         :fileName="selectedFileName"
+                        :parsingEnabled="parsingEnabled"
+                        :chunkingEnabled="chunkingEnabled"
+                        :chunkSize="chunkSize"
+                        :chunkOverlap="chunkOverlap"
                         @update:file="handleFileUpload"
                         @update:file-text="handleFileTextUpdate"
                         @update:input-name="handleInputNameUpdate"
@@ -45,7 +49,11 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                         @add:manual-input="addManualInput"
                         @convert:to-manual="convertToManualInput"
                         @clear:text="clearText"
-                        :disabled="isLoading"
+                        @update:parsing-enabled="setParsingEnabled"
+                        @update:chunking-enabled="chunkingEnabled = $event"
+                        @update:chunk-size="chunkSize = $event"
+                        @update:chunk-overlap="chunkOverlap = $event"
+                        :disabled="isLoading || isParsing"
                         @submit="runExtraction"
                     />
                 </div>
@@ -79,6 +87,18 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 <div class="workflow-panel">
                     <Workflow />
                 </div>
+
+                <section v-if="isParsing" class="parsing-section" aria-live="polite">
+                    <div class="parsing-card">
+                        <div class="spinner-border parsing-spinner" role="status">
+                            <span class="visually-hidden">Parsing in progress</span>
+                        </div>
+                        <div class="parsing-body">
+                            <p class="parsing-title mb-1">{{ parsingTitle }}</p>
+                            <p class="parsing-detail mb-0">{{ parsingDetail }}</p>
+                        </div>
+                    </div>
+                </section>
 
                 <section
                     v-if="hasExtractionActivity || errorMessage || isLoading"
@@ -149,6 +169,13 @@ const {
     selectedFiles,
     selectedExtractors,
     selectedFileName,
+    parsingEnabled,
+    setParsingEnabled,
+    isParsing,
+    parsingProgress,
+    chunkingEnabled,
+    chunkSize,
+    chunkOverlap,
     loadingByExtractor,
     extractorElapsedTimes,
     extractorFinalTimes,
@@ -166,6 +193,23 @@ const {
     removeFile,
     runExtraction,
 } = useExtractionState()
+
+// Docling runs on the backend and can take several seconds on the first document
+// (models are loaded lazily), so the step gets its own spinner above the results.
+const parsingTitle = computed(() => (
+    parsingEnabled.value ? 'Parsing documents with Docling...' : 'Reading files...'
+))
+
+const parsingDetail = computed(() => {
+    const { current, total, name } = parsingProgress.value
+
+    if (total === 0) {
+        return ''
+    }
+
+    const position = total > 1 ? `${current}/${total} — ` : ''
+    return `${position}${name}`
+})
 
 const hasExtractionActivity = computed(() => {
     return Object.keys(loadingByExtractor.value).length > 0
@@ -490,8 +534,50 @@ onBeforeUnmount(() => {
     box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.05);
 }
 
-.results-section {
+.results-section,
+.parsing-section {
     min-width: 0;
+}
+
+.parsing-card {
+    --ods-orange-100: #ff7900;
+    --ods-white-100: #fff;
+    --ods-gray-300: #ddd;
+    --ods-gray-700: #595959;
+    --ods-black-900: #000;
+
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.25rem 1.5rem;
+    border: 0.1rem solid var(--ods-gray-300);
+    border-left: 0.25rem solid var(--ods-orange-100);
+    border-radius: 0.5rem;
+    background: var(--ods-white-100);
+    box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.05);
+}
+
+.parsing-spinner {
+    flex-shrink: 0;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-width: 0.2rem;
+    color: var(--ods-orange-100);
+}
+
+.parsing-body {
+    min-width: 0;
+}
+
+.parsing-title {
+    font-weight: 700;
+    color: var(--ods-black-900);
+}
+
+.parsing-detail {
+    font-size: 0.85rem;
+    color: var(--ods-gray-700);
+    word-break: break-word;
 }
 
 .results-card {

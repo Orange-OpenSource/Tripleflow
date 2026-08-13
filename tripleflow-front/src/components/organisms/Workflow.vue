@@ -31,6 +31,37 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 </div>
             </article>
 
+            <article
+                v-if="parsingEnabled"
+                class="compact-card workflow-node parse-node"
+                :class="{ 'running': isParsing }"
+            >
+                <div class="node-header d-flex align-items-center gap-2 mb-3 fw-semibold text-dark">
+                    <svg class="node-icon" aria-hidden="true" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M625,75V225c0,27.614,19.9,50,44.444,50H825Zm50,250a100,100,0,0,1-100-100V75H175V874.773h0.006c0,0.076-.006.151-0.006,0.227a50,50,0,0,0,50,50H825V325H675ZM325,375H675a25,25,0,0,1,0,50H325A25,25,0,0,1,325,375Zm0,100H675a25,25,0,0,1,0,50H325A25,25,0,0,1,325,475Zm0,100H675a25,25,0,0,1,0,50H325A25,25,0,0,1,325,575ZM425,725H325a25,25,0,0,1,0-50H425A25,25,0,0,1,425,725Z" transform="scale(.96)" fill="currentColor"/></svg>
+                    <span>Parsing</span>
+                    <div v-if="isParsing" class="spinner-border spinner-border-sm ms-2 parse-spinner" role="status"></div>
+                </div>
+                <div class="node-content text-center">
+                    <div class="stage-name fw-bold mb-1">DOCLING</div>
+                    <div class="status-text small text-muted">{{ parseStatusText }}</div>
+                </div>
+            </article>
+
+            <article
+                v-if="chunkingEnabled"
+                class="compact-card workflow-node chunk-node"
+                :class="{ 'running': isChunking }"
+            >
+                <div class="node-header d-flex align-items-center gap-2 mb-3 fw-semibold text-dark">
+                    <svg class="node-icon" aria-hidden="true" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><rect x="120" y="120" width="300" height="300" rx="50"/><rect x="540" y="120" width="300" height="300" rx="50"/><rect x="120" y="540" width="300" height="300" rx="50"/><rect x="540" y="540" width="300" height="300" rx="50"/></g></svg>
+                    <span>Chunking</span>
+                </div>
+                <div class="node-content text-center">
+                    <div class="stage-name fw-bold mb-1">{{ chunkSize }} / {{ chunkOverlap }}</div>
+                    <div class="status-text small text-muted">{{ chunkStatusText }}</div>
+                </div>
+            </article>
+
             <div
                 v-for="extractor in selectedExtractors"
                 :key="`compact-${extractor}`"
@@ -115,6 +146,41 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 </div>
 
                 <div
+                    v-if="parsingEnabled"
+                    class="workflow-node parse-node"
+                    :class="{ 'dragging': isDragging === 'parse', 'running': isParsing }"
+                    :style="{ left: pixelsToRem(getNodePosition('parse').x), top: pixelsToRem(getNodePosition('parse').y) }"
+                    @mousedown="startDrag('parse', $event)"
+                >
+                    <div class="node-header d-flex align-items-center gap-2 mb-3 fw-semibold text-dark">
+                        <svg class="node-icon" aria-hidden="true" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M625,75V225c0,27.614,19.9,50,44.444,50H825Zm50,250a100,100,0,0,1-100-100V75H175V874.773h0.006c0,0.076-.006.151-0.006,0.227a50,50,0,0,0,50,50H825V325H675ZM325,375H675a25,25,0,0,1,0,50H325A25,25,0,0,1,325,375Zm0,100H675a25,25,0,0,1,0,50H325A25,25,0,0,1,325,475Zm0,100H675a25,25,0,0,1,0,50H325A25,25,0,0,1,325,575ZM425,725H325a25,25,0,0,1,0-50H425A25,25,0,0,1,425,725Z" transform="scale(.96)" fill="currentColor"/></svg>
+                        <span>Parsing</span>
+                        <div v-if="isParsing" class="spinner-border spinner-border-sm ms-2 parse-spinner" role="status"></div>
+                    </div>
+                    <div class="node-content text-center">
+                        <div class="stage-name fw-bold mb-1">DOCLING</div>
+                        <div class="status-text small text-muted">{{ parseStatusText }}</div>
+                    </div>
+                </div>
+
+                <div
+                    v-if="chunkingEnabled"
+                    class="workflow-node chunk-node"
+                    :class="{ 'dragging': isDragging === 'chunk', 'running': isChunking }"
+                    :style="{ left: pixelsToRem(getNodePosition('chunk').x), top: pixelsToRem(getNodePosition('chunk').y) }"
+                    @mousedown="startDrag('chunk', $event)"
+                >
+                    <div class="node-header d-flex align-items-center gap-2 mb-3 fw-semibold text-dark">
+                        <svg class="node-icon" aria-hidden="true" viewBox="0 0 960 960" xmlns="http://www.w3.org/2000/svg"><g fill="currentColor"><rect x="120" y="120" width="300" height="300" rx="50"/><rect x="540" y="120" width="300" height="300" rx="50"/><rect x="120" y="540" width="300" height="300" rx="50"/><rect x="540" y="540" width="300" height="300" rx="50"/></g></svg>
+                        <span>Chunking</span>
+                    </div>
+                    <div class="node-content text-center">
+                        <div class="stage-name fw-bold mb-1">{{ chunkSize }} / {{ chunkOverlap }}</div>
+                        <div class="status-text small text-muted">{{ chunkStatusText }}</div>
+                    </div>
+                </div>
+
+                <div
                     v-for="(extractor, index) in selectedExtractors"
                     :key="'extract-' + extractor"
                     class="workflow-node extract-node"
@@ -168,10 +234,25 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 </div>
 
                 <svg class="workflow-connections" width="100%" height="100%">
+                    <template v-for="(stage, i) in preStages.slice(1)" :key="'chain-' + stage">
+                        <line
+                            :x1="getNodeAnchor(preStages[i], 0, 'right').x"
+                            :y1="getNodeAnchor(preStages[i], 0, 'right').y"
+                            :x2="getNodeAnchor(stage, 0, 'left').x"
+                            :y2="getNodeAnchor(stage, 0, 'left').y"
+                            :class="{ 'active': inputStatus === 'ready' }"
+                            stroke-width="2"
+                        />
+                        <polygon
+                            :points="getArrowPoints(getNodeAnchor(stage, 0, 'left'))"
+                            :class="{ 'active': inputStatus === 'ready' }"
+                        />
+                    </template>
+
                     <template v-for="(extractor, index) in selectedExtractors" :key="'input-extract-' + extractor">
                         <line
-                            :x1="getNodeAnchor('input', 0, 'right').x"
-                            :y1="getNodeAnchor('input', 0, 'right').y"
+                            :x1="getNodeAnchor(lastPreStage, 0, 'right').x"
+                            :y1="getNodeAnchor(lastPreStage, 0, 'right').y"
                             :x2="getNodeAnchor('extract', index, 'left').x"
                             :y2="getNodeAnchor('extract', index, 'left').y"
                             :class="{ 'active': getExtractStatus(extractor) !== 'idle' || inputStatus === 'ready', 'animated': getExtractStatus(extractor) === 'running' }"
@@ -220,14 +301,76 @@ const {
     extractorFinalTimes,
     extractorErrors,
     triples,
+    parsingEnabled,
+    isParsing,
+    parsingProgress,
+    isLoading,
+    chunkingEnabled,
+    chunkSize,
+    chunkOverlap,
+    chunkCount,
 } = useExtractionState()
 
+// The chunking step lives inside the /extract call, so it has no progress of its
+// own: the node simply shows it takes part in the run under way.
+const isChunking = computed(() => chunkingEnabled.value && isLoading.value)
+
+/** Label under the Chunking node: the chunk count once a run reported it, the params otherwise. */
+const chunkStatusText = computed(() => {
+    if (chunkCount.value === null) {
+        return 'size / overlap'
+    }
+
+    return chunkCount.value > 1 ? `${chunkCount.value} chunks` : '1 chunk'
+})
+
+/** Label under the Parsing node: file progress while running, otherwise a reminder that the step is optional. */
+const parseStatusText = computed(() => {
+    if (!isParsing.value) {
+        return 'Optional step'
+    }
+
+    const { current, total } = parsingProgress.value
+    return total > 1 ? `Parsing ${current}/${total}...` : 'Parsing...'
+})
+
+const baseX = 24
+const columnGap = 186
+
 const nodePositions = ref({
-    input: { x: 24, y: 68 },
+    input: { x: baseX, y: 68 },
 })
 
 const nodeWidth = 148
 const nodeCenterY = 38
+
+/**
+ * Ordered list of pre-extraction stages shown in the pipeline.
+ * Always starts with 'input'; the optional 'parse' and 'chunk' bricks are
+ * inserted when the user enables them in the extraction form.
+ */
+const preStages = computed(() => {
+    const stages = ['input']
+    if (parsingEnabled.value) {
+        stages.push('parse')
+    }
+    if (chunkingEnabled.value) {
+        stages.push('chunk')
+    }
+    return stages
+})
+
+/** The last pre-extraction stage; every extractor node is fed from it. */
+const lastPreStage = computed(() => preStages.value[preStages.value.length - 1])
+
+/** X position (px) of the Extraction column, shifted right for each enabled pre-stage. */
+const extractColumnX = computed(() => baseX + preStages.value.length * columnGap)
+
+/** Default position of a pre-stage node from its index in the pipeline. */
+function getPreStageDefault(stageId) {
+    const index = preStages.value.indexOf(stageId)
+    return { x: baseX + Math.max(index, 0) * columnGap, y: 68 }
+}
 
 const isDragging = ref(null)
 const dragOffset = ref({ x: 0, y: 0 })
@@ -246,7 +389,10 @@ function pixelsToRem(value) {
 const isCompactLayout = computed(() => viewportWidth.value < compactBreakpoint)
 
 const workflowWorldStyle = computed(() => {
+    const totalColumns = preStages.value.length + 2
+    const worldWidth = baseX + totalColumns * columnGap + 40
     return {
+        minWidth: pixelsToRem(worldWidth),
         transform: `translate(${pixelsToRem(panOffset.value.x)}, ${pixelsToRem(panOffset.value.y)})`
     }
 })
@@ -260,37 +406,31 @@ const canvasStyle = computed(() => {
 })
 
 const getNodePosition = (type, index) => {
-    const nodeId = type === 'extract' || type === 'result' ? `${type}-${selectedExtractors.value[index]}` : type
+    if (type === 'input' || type === 'parse' || type === 'chunk') {
+        return nodePositions.value[type] || getPreStageDefault(type)
+    }
+
+    const nodeId = `${type}-${selectedExtractors.value[index]}`
 
     if (nodePositions.value[nodeId]) {
         return nodePositions.value[nodeId]
     }
 
-    if (selectedExtractors.value.length === 1) {
-        if (type === 'extract') {
-            return { x: 210, y: 68 }
-        } else if (type === 'result') {
-            return { x: 396, y: 68 }
-        }
-    } else {
-        const baseY = 68
-        const spacing = 72
-        const totalHeight = (selectedExtractors.value.length - 1) * spacing
-        const startY = baseY - totalHeight / 2
+    const columnX = type === 'extract' ? extractColumnX.value : extractColumnX.value + columnGap
 
-        if (type === 'extract') {
-            return {
-                x: 210,
-                y: startY + (index * spacing)
-            }
-        } else if (type === 'result') {
-            return {
-                x: 396,
-                y: startY + (index * spacing)
-            }
-        }
+    if (selectedExtractors.value.length === 1) {
+        return { x: columnX, y: 68 }
     }
-    return { x: 0, y: 0 }
+
+    const baseY = 68
+    const spacing = 72
+    const totalHeight = (selectedExtractors.value.length - 1) * spacing
+    const startY = baseY - totalHeight / 2
+
+    return {
+        x: columnX,
+        y: startY + (index * spacing)
+    }
 }
 
 /**
@@ -298,9 +438,7 @@ const getNodePosition = (type, index) => {
  * Used to draw the SVG lines between nodes.
  */
 function getNodeAnchor(type, index, side) {
-    const position = type === 'input'
-        ? nodePositions.value.input
-        : getNodePosition(type, index)
+    const position = getNodePosition(type, index)
 
     const xOffset = side === 'right' ? nodeWidth : 0
 
@@ -514,7 +652,11 @@ onBeforeUnmount(() => {
     --ods-black-900: #000;
     --ods-green-200: #32c832;
     --ods-red-200: #cd3c14;
+    --ods-purple-500: #6e4aa7;
+    --ods-pink-600: #bc4d9a;
     --node-input: #1677c8;
+    --node-parse: var(--ods-purple-500);
+    --node-chunk: var(--ods-pink-600);
     --node-extract: #ff7900;
     --node-result: #21a366;
 }
@@ -606,6 +748,17 @@ onBeforeUnmount(() => {
     overflow: hidden;
 }
 
+/*
+ * Canvas nodes must be exactly nodeWidth (148px) wide: the SVG connection
+ * anchors are computed from that constant, so any extra width would let the
+ * node overlap and hide the start of its outgoing arrow.
+ * Scoped to .workflow-world so the full-width compact cards keep their layout.
+ */
+.workflow-world .workflow-node {
+    width: 9.25rem;
+    min-width: 9.25rem;
+}
+
 .workflow-node.clickable {
     cursor: pointer;
 }
@@ -642,6 +795,30 @@ onBeforeUnmount(() => {
 
 .input-node {
     --node-accent: var(--node-input);
+}
+
+.parse-node {
+    --node-accent: var(--node-parse);
+}
+
+.chunk-node {
+    --node-accent: var(--node-chunk);
+}
+
+.parse-node .node-header,
+.chunk-node .node-header {
+    color: var(--node-accent) !important;
+}
+
+.parse-spinner {
+    color: var(--node-accent);
+}
+
+.parse-node .stage-name,
+.chunk-node .stage-name {
+    color: var(--node-accent);
+    font-size: 0.84rem;
+    letter-spacing: 0.01em;
 }
 
 .extract-node {
@@ -683,6 +860,9 @@ onBeforeUnmount(() => {
 .compact-card.input-node .badge {
     background: color-mix(in srgb, var(--node-input) 10%, white) !important;
     border: 0.06rem solid color-mix(in srgb, var(--node-input) 20%, white);
+    max-width: 100%;
+    white-space: normal;
+    word-break: break-word;
 }
 
 .extractor-badge {

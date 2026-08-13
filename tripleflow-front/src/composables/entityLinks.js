@@ -19,8 +19,12 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
  *   - anything else (unknown extractor, no config, missing base URL) -> no link at all:
  *     without a declared alignment we cannot know which knowledge base a QID belongs to.
  * Anything that is not a valid Q###/P### id also yields no link, so callers can hide it.
+ *
+ * `buildSinkEntityLink` applies the same rule to a publication target's own
+ * `knowledge_base`, so an already-published triple links to where it landed.
  */
 import { useExtractors } from './extractors/useExtractors'
+import { useSinks } from './sinks/useSinks'
 
 /** Base URL of public Wikidata used to build item/property links. */
 export const WIKIDATA_BASE_URL = 'https://www.wikidata.org/wiki/'
@@ -78,23 +82,15 @@ export function buildWikibaseLink(id, entityType, baseUrl) {
 }
 
 /**
- * Resolves the linking base declared in an extractor's `knowledge_base` config.
- * Returns null when no alignment is declared (unknown extractor, no config,
- * wikibase without base URL): in that case no link must be produced.
- * @param {string} extractorName
+ * Normalises a `knowledge_base` block (from an extractor or from a publication
+ * target) into the linking base to use. Returns null when no alignment is
+ * declared — no config, type "none", or a wikibase without base URL: in that
+ * case no link must be produced, since a QID alone does not say which knowledge
+ * base it belongs to.
+ * @param {object} [kb]
  * @returns {{ type: 'wikidata' } | { type: 'wikibase', baseUrl: string } | null}
  */
-function resolveLinkingBase(extractorName) {
-    const name = typeof extractorName === 'string' ? extractorName.trim().toLowerCase() : ''
-
-    if (!name) {
-        return null
-    }
-
-    const { availableExtractors } = useExtractors()
-    const match = availableExtractors.value.find((extractor) => extractor.id === name)
-    const kb = match?.knowledge_base ?? match?.knowledgeBase
-
+function normalizeLinkingBase(kb) {
     if (kb?.type === 'wikidata') {
         return { type: 'wikidata' }
     }
@@ -109,6 +105,34 @@ function resolveLinkingBase(extractorName) {
     return null
 }
 
+/** Builds the URL for an ID against an already-resolved linking base. */
+function linkForBase(base, id, entityType) {
+    if (!base) {
+        return ''
+    }
+
+    return base.type === 'wikibase'
+        ? buildWikibaseLink(id, entityType, base.baseUrl)
+        : buildWikidataLink(id, entityType)
+}
+
+/**
+ * Resolves the linking base declared in an extractor's `knowledge_base` config.
+ * @param {string} extractorName
+ * @returns {{ type: 'wikidata' } | { type: 'wikibase', baseUrl: string } | null}
+ */
+function resolveLinkingBase(extractorName) {
+    const name = typeof extractorName === 'string' ? extractorName.trim().toLowerCase() : ''
+
+    if (!name) {
+        return null
+    }
+
+    const { availableExtractors } = useExtractors()
+    const match = availableExtractors.value.find((extractor) => extractor.id === name)
+    return normalizeLinkingBase(match?.knowledge_base ?? match?.knowledgeBase)
+}
+
 /**
  * Builds a link for a triple part, targeting the knowledge base configured for the extractor
  * that produced it. Returns an empty string when no alignment is declared or the ID is not
@@ -119,13 +143,32 @@ function resolveLinkingBase(extractorName) {
  * @returns {string}
  */
 export function buildEntityLink(id, entityType, extractorName) {
-    const base = resolveLinkingBase(extractorName)
+    return linkForBase(resolveLinkingBase(extractorName), id, entityType)
+}
 
-    if (!base) {
+/**
+ * Builds a link for a triple part into the knowledge base a publication target
+ * writes to — the other end of the loop from `buildEntityLink`: once a triple has
+ * been published, its identifiers point at where they now live rather than at the
+ * extractor's reference base.
+ *
+ * Returns an empty string when the target declares no browsable base, is unknown,
+ * or the targets have not been loaded yet, so callers can fall back to the
+ * extractor's link.
+ * @param {string} id - entity ID (Q### for items, P### for properties)
+ * @param {'item'|'property'} entityType
+ * @param {string} [sinkId] - id of the target the triple was published to
+ * @returns {string}
+ */
+export function buildSinkEntityLink(id, entityType, sinkId) {
+    const targetId = typeof sinkId === 'string' ? sinkId.trim() : ''
+
+    if (!targetId) {
         return ''
     }
 
-    return base.type === 'wikibase'
-        ? buildWikibaseLink(id, entityType, base.baseUrl)
-        : buildWikidataLink(id, entityType)
+    const { availableSinks } = useSinks()
+    const match = availableSinks.value.find((sink) => sink.id === targetId)
+
+    return linkForBase(normalizeLinkingBase(match?.knowledge_base ?? match?.knowledgeBase), id, entityType)
 }

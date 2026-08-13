@@ -24,7 +24,17 @@ WORKDIR /app
 
 COPY requirements.txt .
 
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.13.0 torchvision==0.28.0
+
 RUN pip install --no-cache-dir -r requirements.txt
+
+ENV DOCLING_ARTIFACTS_PATH=/opt/docling-models
+RUN docling-tools models download -o /opt/docling-models layout tableformer
+ENV HF_HUB_OFFLINE=1
+
+RUN pip install --no-cache-dir opencv-python-headless
 
 COPY . .
 

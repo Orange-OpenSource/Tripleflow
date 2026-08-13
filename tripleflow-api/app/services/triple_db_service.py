@@ -15,7 +15,12 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 from bson import ObjectId
-from app.db import triples_collection, files_collection, audit_collection
+from app.db import (
+    AUDIT_MAX_ENTRIES,
+    triples_collection,
+    files_collection,
+    audit_collection,
+)
 
 
 def now_utc() -> datetime:
@@ -84,6 +89,7 @@ def _merge_into(
 ) -> None:
     """Merges a duplicate triple into an existing one and deletes the duplicate."""
     source_extractors = source.get("source", {}).get("extractors", [])
+    source_occurrences = source.get("source", {}).get("occurrences", [])
     merged_history = sorted(
         target.get("history", []) + source.get("history", []),
         key=lambda h: h.get("timestamp", datetime.min.replace(tzinfo=timezone.utc)),
@@ -106,10 +112,40 @@ def _merge_into(
         {"_id": target["_id"]},
         {
             "$set": {"status": status, "history": merged_history},
-            "$addToSet": {"source.extractors": {"$each": source_extractors}},
+            "$addToSet": {
+                "source.extractors": {"$each": source_extractors},
+                # The passages the merged-away triple was found in are part of its
+                # provenance; losing them would break the source-text panel.
+                "source.occurrences": {"$each": source_occurrences},
+            },
         },
     )
     triples_collection.delete_one({"_id": source["_id"]})
+
+
+def _build_occurrence(
+    triple: dict, file_id: str, file_name: str, extractor: str
+) -> dict | None:
+    """
+    Describes where one extraction found this triple: which document, which chunk
+    of it, the offsets of that chunk in the document text, and the page they fall
+    on. The validation interface uses the offsets to point the reviewer at the
+    exact passage. Returns None for a triple carrying no location.
+    """
+    chunk = triple.get("chunk") or {}
+
+    if not chunk:
+        return None
+
+    return {
+        "file_id": file_id,
+        "file_name": file_name,
+        "extractor": extractor,
+        "chunk_id": chunk.get("chunk_id"),
+        "start": chunk.get("start"),
+        "end": chunk.get("end"),
+        "page": chunk.get("page"),
+    }
 
 
 def save_triples(
@@ -127,13 +163,21 @@ def save_triples(
         subject = triple.get("subject") or {}
         predicate = triple.get("predicate") or {}
         obj = triple.get("obj") or {}
+        occurrence = _build_occurrence(triple, file_id, file_name, extractor)
 
         existing = _find_existing_triple(subject, predicate, obj)
 
         if existing:
+            # A triple several extractors (or several documents) agree on stays a
+            # single row, but every occurrence is kept: that is what lets the
+            # reviewer see each passage it was found in.
+            additions: dict = {"source.extractors": extractor}
+            if occurrence is not None:
+                additions["source.occurrences"] = occurrence
+
             triples_collection.update_one(
                 {"_id": existing["_id"]},
-                {"$addToSet": {"source.extractors": extractor}},
+                {"$addToSet": additions},
             )
             affected_ids.append(str(existing["_id"]))
         else:
@@ -147,6 +191,7 @@ def save_triples(
                     "file_id": file_id,
                     "extractors": [extractor],
                     "extraction_date": now_utc(),
+                    "occurrences": [occurrence] if occurrence is not None else [],
                 },
                 "heuristic_score": triple.get("heuristic_score"),
                 "status": "pending",
@@ -208,6 +253,38 @@ def get_file_content(file_id: str) -> str | None:
     return doc.get("text")
 
 
+def rename_file(file_id: str, file_name: str) -> dict:
+    """
+    Renames a file. The name is copied onto every triple extracted from it (and
+    onto each of their occurrences), so the whole review stays consistent instead
+    of showing the old name wherever provenance is displayed or published.
+    Raises ValueError if the file does not exist.
+    """
+    name = (file_name or "").strip()
+
+    if not name:
+        raise ValueError("File name is required")
+
+    result = files_collection.update_one(
+        {"file_id": file_id}, {"$set": {"file_name": name}}
+    )
+
+    if result.matched_count == 0:
+        raise ValueError(f"File '{file_id}' not found")
+
+    triples_collection.update_many(
+        {"source.file_id": file_id},
+        {"$set": {"source.file_name": name}},
+    )
+    triples_collection.update_many(
+        {"source.occurrences.file_id": file_id},
+        {"$set": {"source.occurrences.$[occurrence].file_name": name}},
+        array_filters=[{"occurrence.file_id": file_id}],
+    )
+
+    return {"file_id": file_id, "file_name": name}
+
+
 def get_files() -> list[dict]:
     """Returns all files with their review progress counts (pending, validated, rejected)."""
     files = list(files_collection.find())
@@ -216,7 +293,7 @@ def get_files() -> list[dict]:
         file["_id"] = str(file["_id"])
         counts = triples_collection.aggregate(
             [
-                {"$match": {"source.file_id": file["file_id"]}},
+                {"$match": _from_file(file["file_id"])},
                 {"$group": {"_id": "$status", "count": {"$sum": 1}}},
             ]
         )
@@ -230,6 +307,22 @@ def get_files() -> list[dict]:
     return result
 
 
+def _from_file(file_id: str) -> dict:
+    """
+    Matches every triple found in a document. A triple several documents agree on
+    is stored once, attached to the first of them, so matching only on the primary
+    file_id would hide it under all the others. Its occurrences name them all.
+    The primary file_id alone is still matched, for triples saved before
+    occurrences were recorded.
+    """
+    return {
+        "$or": [
+            {"source.file_id": file_id},
+            {"source.occurrences.file_id": file_id},
+        ]
+    }
+
+
 def get_triples(
     status: Optional[str] = None,
     file_id: Optional[str] = None,
@@ -240,7 +333,7 @@ def get_triples(
     if status:
         query["status"] = status
     if file_id:
-        query["source.file_id"] = file_id
+        query.update(_from_file(file_id))
     if extractor:
         query["source.extractors"] = extractor
 
@@ -250,8 +343,71 @@ def get_triples(
     return triples
 
 
-def _record_deletion(action: str, user_name: str, **details) -> None:
-    """Appends an entry to the audit log so deletions remain traceable after the data is gone."""
+def get_triples_by_ids(triple_ids: list[str]) -> list[dict]:
+    """Returns the triples matching the given triple_ids, in no particular order."""
+    triples = list(triples_collection.find({"triple_id": {"$in": triple_ids}}))
+    for triple in triples:
+        triple["_id"] = str(triple["_id"])
+    return triples
+
+
+def mark_triples_published(
+    triple_ids: list[str],
+    sink_id: str,
+    user_name: str,
+) -> int:
+    """
+    Records that the given triples were inserted into a sink's graph, and appends
+    a history entry so the publication shows up in each triple's timeline.
+    Returns the number of triples updated.
+    """
+    timestamp = now_utc()
+    result = triples_collection.update_many(
+        {"triple_id": {"$in": triple_ids}},
+        {
+            "$set": {
+                "published": {
+                    "sink_id": sink_id,
+                    "user_name": user_name,
+                    "timestamp": timestamp,
+                }
+            },
+            "$push": {
+                "history": {
+                    "action": "published",
+                    "user_id": None,
+                    "user_name": user_name,
+                    "timestamp": timestamp,
+                    "comments": f"Published to target '{sink_id}'",
+                    "previous_value": None,
+                }
+            },
+        },
+    )
+    return result.modified_count
+
+
+def _prune_audit_log() -> None:
+    """
+    Drops the oldest entries so the audit log never holds more than AUDIT_MAX_ENTRIES.
+
+    Ordering is on _id rather than timestamp: ObjectIds follow insertion order and are
+    unique, so two entries written in the same instant still have a defined oldest one
+    and the cap stays exact.
+    """
+    oldest_kept = list(
+        audit_collection.find({}, {"_id": 1})
+        .sort("_id", -1)
+        .skip(AUDIT_MAX_ENTRIES - 1)
+        .limit(1)
+    )
+    if not oldest_kept:
+        return
+    audit_collection.delete_many({"_id": {"$lt": oldest_kept[0]["_id"]}})
+
+
+def _record_audit(action: str, user_name: str, **details) -> None:
+    """Appends an entry to the audit log and trims it back down to its cap."""
     audit_collection.insert_one(
         {
             "action": action,
@@ -260,11 +416,34 @@ def _record_deletion(action: str, user_name: str, **details) -> None:
             **details,
         }
     )
+    _prune_audit_log()
+
+
+def record_publication(
+    sink_id: str,
+    user_name: str,
+    published_count: int,
+    skipped_count: int,
+) -> None:
+    """Appends a publication entry to the audit log so pushes to an external KG stay traceable."""
+    _record_audit(
+        "publish",
+        user_name,
+        sink_id=sink_id,
+        published_count=published_count,
+        skipped_count=skipped_count,
+    )
+
+
+def _record_deletion(action: str, user_name: str, **details) -> None:
+    """Appends an entry to the audit log so deletions remain traceable after the data is gone."""
+    _record_audit(action, user_name, **details)
 
 
 def get_audit_log(limit: int = 200) -> list[dict]:
-    """Returns recent deletion audit entries, most recent first."""
-    entries = list(audit_collection.find({}).sort("timestamp", -1).limit(limit))
+    """Returns recent audit entries, most recent first, never more than the log's cap."""
+    capped = max(1, min(limit, AUDIT_MAX_ENTRIES))
+    entries = list(audit_collection.find({}).sort("_id", -1).limit(capped))
     for entry in entries:
         entry["_id"] = str(entry["_id"])
     return entries
@@ -287,16 +466,61 @@ def clear_database(user_name: str) -> dict:
     return {"triples_deleted": triples_deleted, "files_deleted": files_deleted}
 
 
+def _detach_file_from_triples(file_id: str) -> int:
+    """
+    Removes a document from every triple found in it, and returns how many triples
+    that left with nothing to point at.
+
+    A triple several documents agree on survives the deletion of one of them: it
+    is re-attached to a document it was also found in, and its extractor list is
+    recomputed from what is left — otherwise the deletion would take away a triple
+    another document still supports, and keep claiming an extractor that only ever
+    found it in the document being removed.
+    """
+    triples_collection.update_many(
+        {"source.occurrences.file_id": file_id},
+        {"$pull": {"source.occurrences": {"file_id": file_id}}},
+    )
+
+    deleted = 0
+
+    for triple in triples_collection.find({"source.file_id": file_id}):
+        remaining = (triple.get("source") or {}).get("occurrences") or []
+
+        if not remaining:
+            triples_collection.delete_one({"_id": triple["_id"]})
+            deleted += 1
+            continue
+
+        fallback = remaining[0]
+        extractors = sorted({
+            occurrence["extractor"]
+            for occurrence in remaining
+            if occurrence.get("extractor")
+        })
+        updates = {
+            "source.file_id": fallback.get("file_id"),
+            "source.file_name": fallback.get("file_name"),
+        }
+        if extractors:
+            updates["source.extractors"] = extractors
+
+        triples_collection.update_one({"_id": triple["_id"]}, {"$set": updates})
+
+    return deleted
+
+
 def delete_file(file_id: str, user_name: str) -> dict:
     """
-    Deletes a single file and all of its triples, recording who did it in the audit log.
-    Raises ValueError if the file does not exist. Returns the deleted counts.
+    Deletes a single file and the triples that only it supported, recording who did
+    it in the audit log. Raises ValueError if the file does not exist. Returns the
+    deleted counts.
     """
     file_doc = files_collection.find_one({"file_id": file_id})
     if file_doc is None:
         raise ValueError(f"File '{file_id}' not found")
 
-    triples_deleted = triples_collection.delete_many({"source.file_id": file_id}).deleted_count
+    triples_deleted = _detach_file_from_triples(file_id)
     files_collection.delete_one({"file_id": file_id})
     _record_deletion(
         "delete_file",

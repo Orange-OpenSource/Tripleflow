@@ -52,8 +52,15 @@ async def extract_triples(text: str, extractor: str) -> list[TripleDict]:
     return await call_custom_extractor(config, text)
 
 
-def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
-    """Extracts readable text from a PDF file given as bytes."""
+PAGE_SEPARATOR = "\n\n"
+
+
+def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> tuple[str, list[int]]:
+    """Extracts readable text from a PDF file given as bytes.
+
+    Returns the text and the offset at which each page starts, so a triple
+    extracted from it can later be traced back to a page.
+    """
     if not pdf_bytes:
         raise ValueError("PDF file is empty")
 
@@ -63,18 +70,27 @@ def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
         raise ValueError("Invalid PDF file") from exc
 
     pages_text: list[str] = []
+    page_offsets: list[int] = []
+    cursor = 0
 
     for page in reader.pages:
-        page_text = page.extract_text() or ""
-        if page_text.strip():
-            pages_text.append(page_text.strip())
+        page_text = (page.extract_text() or "").strip()
+        # A page with no extractable text still claims its offset, or every page
+        # after it would be numbered one too low.
+        page_offsets.append(cursor)
 
-    text = "\n\n".join(pages_text).strip()
+        if not page_text:
+            continue
+
+        pages_text.append(page_text)
+        cursor += len(page_text) + len(PAGE_SEPARATOR)
+
+    text = PAGE_SEPARATOR.join(pages_text)
 
     if not text:
         raise ValueError("No extractable text found in PDF")
 
-    return text
+    return text, page_offsets
 
 
 def extract_text_from_txt_bytes(file_bytes: bytes) -> str:
@@ -166,20 +182,49 @@ def node_value(node: object) -> str:
     return node_id(node) or node_label(node)
 
 
+def dedupe_triples(triples: list[TripleDict]) -> list[TripleDict]:
+    """Drops triples repeated across chunks, keeping the first occurrence.
+
+    Overlapping chunks make duplicates expected, and they cannot be caught by
+    triple_id: build_triple_id mixes in the position of the triple, so the same
+    fact found in two chunks would get two different IDs.
+    """
+    seen: set[tuple[str, str, str, str]] = set()
+    unique: list[TripleDict] = []
+
+    for triple in triples:
+        fingerprint = (
+            node_value(triple.get("subject", {})).lower(),
+            node_value(triple.get("predicate", {})).lower(),
+            node_value(triple.get("obj", {})).lower(),
+            normalize_date(triple.get("date")) or "",
+        )
+
+        if fingerprint in seen:
+            continue
+
+        seen.add(fingerprint)
+        unique.append(triple)
+
+    return unique
+
+
 _QID_RE = re.compile(r"^Q\d+$", re.IGNORECASE)
 _PID_RE = re.compile(r"^P\d+$", re.IGNORECASE)
 
 
 def _compute_heuristic_score(triple: TripleDict) -> float:
-    """Estimates a confidence score based on how many nodes have a Wikidata ID."""
-    subject_id = node_id(triple.get("subject", {}))
-    predicate_id = node_id(triple.get("predicate", {}))
-    obj_id = node_id(triple.get("obj", {}))
+    """Estimates a confidence score based on how many nodes have a Wikidata ID.
 
+    Each of the three parts counts only when its identifier has the shape the
+    knowledge base gives it: Q### for the entities, P### for the predicate. An
+    object carrying anything else — a literal, a raw string an extractor could
+    not align — is not resolved, and must not inflate the score.
+    """
     resolved = sum([
-        bool(subject_id and _QID_RE.match(subject_id)),
-        bool(predicate_id and _PID_RE.match(predicate_id)),
-        bool(obj_id and (_QID_RE.match(obj_id) or obj_id)),
+        bool(_QID_RE.match(node_id(triple.get("subject", {})))),
+        bool(_PID_RE.match(node_id(triple.get("predicate", {})))),
+        bool(_QID_RE.match(node_id(triple.get("obj", {})))),
     ])
 
     scores = {0: 0.20, 1: 0.45, 2: 0.65, 3: 0.85}

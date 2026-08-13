@@ -24,10 +24,16 @@ print("Connected to MongoDB at", os.environ["MONGO_URI"])
 triples_collection: Collection = db["triples"]
 files_collection: Collection = db["files"]
 extractors_collection: Collection = db["extractors"]
+sinks_collection: Collection = db["sinks"]
 audit_collection: Collection = db["audit_logs"]
 
 # Deletion audit entries are kept for one year, then purged automatically by MongoDB.
 AUDIT_RETENTION_SECONDS = 365 * 24 * 60 * 60
+
+# The TTL above bounds how *old* the audit log can get, but not how *big*: a busy
+# workspace can write thousands of entries in a week and none of them expire. So the
+# log is also capped in length, oldest entries dropping out as new ones arrive.
+AUDIT_MAX_ENTRIES = max(1, int(os.getenv("AUDIT_MAX_ENTRIES", "500")))
 
 
 def ensure_indexes() -> None:

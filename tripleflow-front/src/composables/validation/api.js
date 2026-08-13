@@ -1,15 +1,17 @@
-/*  
+/*
 Software Name : Tripleflow
 SPDX-FileCopyrightText: Copyright (c) Orange SA
 SPDX-License-Identifier: MIT
- 
+
 This software is distributed under the MIT License,
 see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
- 
+
 Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 
 */
+
+import { buildErrorMessage, readJson } from '../apiError'
 import { DEFAULT_API_BASE_URL } from '../extraction/constants'
 
 const apiBaseUrl = (import.meta.env.VITE_TRIPLEFLOW_API_URL || DEFAULT_API_BASE_URL).replace(/\/$/, '')
@@ -76,8 +78,24 @@ export async function renameFile(fileId, fileName) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ file_name: fileName }),
     })
-    if (!response.ok) throw new Error('Failed to rename file')
+    if (!response.ok) {
+        throw new Error(buildErrorMessage(await readJson(response), 'Failed to rename file'))
+    }
     return response.json()
+}
+
+/**
+ * Fetches the audit log: who deleted or published what, and when. The backend caps the
+ * log's length, so `max_entries` tells whether this is the whole history or only its tail.
+ * @returns {Promise<{ entries: object[], max_entries: number }>}
+ */
+export async function fetchAuditLog() {
+    const response = await fetch(`${apiBaseUrl}/database/audit`)
+    if (!response.ok) {
+        throw new Error(buildErrorMessage(await readJson(response), 'Failed to fetch the audit log'))
+    }
+    const data = await response.json()
+    return { entries: data.entries ?? [], max_entries: data.max_entries ?? null }
 }
 
 /**

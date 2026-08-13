@@ -43,7 +43,7 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
         </div>
 
         <div class="mb-3">
-            <label for="input-file" class="form-label fw-bold mb-2">Upload .txt or .pdf files</label>
+            <label for="input-file" class="form-label fw-bold mb-2">{{ uploadLabel }}</label>
 
             <div
                 class="upload-dropzone"
@@ -58,7 +58,7 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                     id="input-file"
                     class="visually-hidden"
                     type="file"
-                    accept=".txt,.pdf,text/plain,application/pdf"
+                    :accept="fileAccept"
                     multiple
                     @change="handleInputChange"
                 />
@@ -233,10 +233,94 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
             </button>
         </div>
 
+        <div class="preprocessing-block mb-4">
+            <div class="preprocessing-header mb-2">
+                <label class="form-label fw-bold mb-0">Preprocessing</label>
+                <span class="preprocessing-optional">Optional</span>
+            </div>
+            <p class="small text-muted mt-0 mb-3">
+                Add optional steps to the pipeline before extraction.
+            </p>
+
+            <div class="preprocessing-option">
+                <div class="form-check form-switch">
+                    <input
+                        id="toggle-parsing"
+                        class="form-check-input"
+                        type="checkbox"
+                        role="switch"
+                        :checked="parsingEnabled"
+                        :disabled="disabled"
+                        @change="emit('update:parsing-enabled', $event.target.checked)"
+                    />
+                    <label class="form-check-label fw-semibold" for="toggle-parsing">
+                        Parse documents with Docling
+                    </label>
+                </div>
+                <p class="preprocessing-hint">
+                    Extracts clean text from uploaded documents. The result is sent to the
+                    input above so you can review and edit it before extraction.
+                </p>
+            </div>
+
+            <div class="preprocessing-option">
+                <div class="form-check form-switch">
+                    <input
+                        id="toggle-chunking"
+                        class="form-check-input"
+                        type="checkbox"
+                        role="switch"
+                        :checked="chunkingEnabled"
+                        :disabled="disabled"
+                        @change="emit('update:chunking-enabled', $event.target.checked)"
+                    />
+                    <label class="form-check-label fw-semibold" for="toggle-chunking">
+                        Chunk text before extraction
+                    </label>
+                </div>
+                <p class="preprocessing-hint">
+                    Splits the input into overlapping chunks, each extracted separately.
+                    Useful for long documents; triples found twice are merged.
+                </p>
+
+                <div v-if="chunkingEnabled" class="chunk-params">
+                    <div class="chunk-param">
+                        <label for="chunk-size" class="chunk-param-label">Chunk size (tokens)</label>
+                        <input
+                            id="chunk-size"
+                            class="form-control form-control-sm chunk-param-input"
+                            type="number"
+                            min="50"
+                            max="8000"
+                            :value="chunkSize"
+                            :disabled="disabled"
+                            @input="emit('update:chunk-size', Number($event.target.value))"
+                        />
+                    </div>
+                    <div class="chunk-param">
+                        <label for="chunk-overlap" class="chunk-param-label">Overlap (tokens)</label>
+                        <input
+                            id="chunk-overlap"
+                            class="form-control form-control-sm chunk-param-input"
+                            type="number"
+                            min="0"
+                            max="2000"
+                            :value="chunkOverlap"
+                            :disabled="disabled"
+                            @input="emit('update:chunk-overlap', Number($event.target.value))"
+                        />
+                    </div>
+                </div>
+                <p v-if="chunkingEnabled && chunkOverlap >= chunkSize" class="chunk-param-error">
+                    Overlap must be smaller than the chunk size.
+                </p>
+            </div>
+        </div>
+
         <div class="d-flex gap-2">
             <Button
                 variant="primary"
-                :disabled="disabled || extractors.length === 0"
+                :disabled="disabled || extractors.length === 0 || hasInvalidChunkParams"
                 @click="validateAndSubmit"
             >
                 Run extraction
@@ -259,9 +343,10 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
  * Handles extractor selection, file and folder upload (with drag-and-drop support),
  * per-file text editing, manual text input, and the Run/Clear actions.
  */
-import { nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import Button from '../atoms/Button.vue'
 import Textarea from '../atoms/Textarea.vue'
+import { SUPPORTED_FILE_ACCEPT } from '../../composables/extraction/constants'
 
 const props = defineProps({
     modelValue: {
@@ -296,6 +381,22 @@ const props = defineProps({
         type: Number,
         default: null,
     },
+    parsingEnabled: {
+        type: Boolean,
+        default: false,
+    },
+    chunkingEnabled: {
+        type: Boolean,
+        default: false,
+    },
+    chunkSize: {
+        type: Number,
+        default: 512,
+    },
+    chunkOverlap: {
+        type: Number,
+        default: 50,
+    },
 })
 
 const emit = defineEmits([
@@ -308,8 +409,22 @@ const emit = defineEmits([
     'add:manual-input',
     'convert:to-manual',
     'clear:text',
+    'update:parsing-enabled',
+    'update:chunking-enabled',
+    'update:chunk-size',
+    'update:chunk-overlap',
     'submit',
 ])
+
+// The parsing mode changes how a PDF is read, not which files are accepted.
+const fileAccept = SUPPORTED_FILE_ACCEPT
+const uploadLabel = 'Upload .txt or .pdf files'
+
+// The backend rejects an overlap greater than or equal to the chunk size, so the
+// run is blocked before the round-trip.
+const hasInvalidChunkParams = computed(() => (
+    props.chunkingEnabled && props.chunkOverlap >= props.chunkSize
+))
 
 const fileInputRef = ref(null)
 const folderInputRef = ref(null)
@@ -732,5 +847,86 @@ watch(
     outline: none;
     color: inherit;
     font-family: inherit;
+}
+
+.preprocessing-block {
+    --ods-orange-100: #ff7900;
+    --ods-gray-200: #eee;
+    --ods-gray-300: #ddd;
+    --ods-gray-700: #595959;
+
+    padding: 1rem;
+    border: 0.1rem solid var(--ods-gray-300);
+    border-radius: 0.6rem;
+    background: var(--ods-gray-200);
+}
+
+.preprocessing-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.preprocessing-optional {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    color: var(--ods-gray-700);
+    background: var(--ods-gray-200);
+    padding: 0.1rem 0.45rem;
+    border-radius: 1rem;
+}
+
+.preprocessing-option + .preprocessing-option {
+    margin-top: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 0.06rem solid var(--ods-gray-300);
+}
+
+.preprocessing-option .form-check-input:checked {
+    background-color: var(--ods-orange-100);
+    border-color: var(--ods-orange-100);
+}
+
+.preprocessing-option .form-check-input:focus {
+    border-color: var(--ods-orange-100);
+    box-shadow: 0 0 0 0.2rem rgba(255, 121, 0, 0.2);
+}
+
+.preprocessing-hint {
+    margin: 0.25rem 0 0 2.5rem;
+    font-size: 0.78rem;
+    color: var(--ods-gray-700);
+    line-height: 1.35;
+}
+
+.chunk-params {
+    display: flex;
+    gap: 0.75rem;
+    margin: 0.65rem 0 0 2.5rem;
+}
+
+.chunk-param {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.chunk-param-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--ods-gray-700);
+}
+
+.chunk-param-input {
+    width: 6rem;
+}
+
+.chunk-param-error {
+    margin: 0.5rem 0 0 2.5rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #cd3c14;
 }
 </style>
