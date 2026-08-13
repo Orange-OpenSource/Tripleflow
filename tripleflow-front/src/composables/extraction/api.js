@@ -1,17 +1,17 @@
-/*  
+/*
 Software Name : Tripleflow
 SPDX-FileCopyrightText: Copyright (c) Orange SA
 SPDX-License-Identifier: MIT
- 
+
 This software is distributed under the MIT License,
 see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
- 
+
 Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 
 */
 
-import { BACKEND_ERROR_PREFIX, DEFAULT_API_BASE_URL } from './constants'
+import { BACKEND_ERROR_PREFIX, DEFAULT_API_BASE_URL, PARSE_REQUEST_ERROR } from './constants'
 
 const apiBaseUrl = (import.meta.env.VITE_TRIPLEFLOW_API_URL || DEFAULT_API_BASE_URL).replace(/\/$/, '')
 
@@ -197,13 +197,26 @@ function getErrorMessage(data, extractor) {
  * Builds the POST body for the /extract endpoint.
  * Uses the batch form (texts array) when more than one text is provided,
  * otherwise uses the single-text form.
+ * Chunking params are only sent when the step is enabled; omitting them tells
+ * the backend to extract from the whole text in one call.
  */
-function buildExtractionRequestBody({ extractor, text, texts, file_name, file_names }) {
+function buildExtractionRequestBody({
+    extractor, text, texts, file_name, file_names, chunking, page_offsets, page_offsets_list,
+}) {
+    const chunkParams = chunking
+        ? { chunk_size: chunking.size, chunk_overlap: chunking.overlap }
+        : {}
+
     if (Array.isArray(texts) && texts.length > 1) {
         return {
             texts,
             extractor,
             ...(Array.isArray(file_names) && file_names.some(Boolean) && { file_names }),
+            // Only worth sending when at least one input is paginated.
+            ...(Array.isArray(page_offsets_list)
+                && page_offsets_list.some((offsets) => offsets?.length)
+                && { page_offsets_list }),
+            ...chunkParams,
         }
     }
 
@@ -211,22 +224,24 @@ function buildExtractionRequestBody({ extractor, text, texts, file_name, file_na
         text,
         extractor,
         ...(file_name && { file_name }),
+        ...(page_offsets?.length && { page_offsets }),
+        ...chunkParams,
     }
 }
 
 /**
  * Sends a POST request to /extract and returns the raw response and parsed body.
  * @param {string} extractor - extractor identifier
- * @param {{ text: string, texts: string[], file_name?: string, file_names?: string[] }} payload
+ * @param {{ text: string, texts: string[], file_name?: string, file_names?: string[], chunking?: { size: number, overlap: number }|null, page_offsets?: number[], page_offsets_list?: number[][] }} payload
  * @returns {Promise<{ response: Response, data: object }>}
  */
-async function requestExtraction(extractor, { text, texts, file_name, file_names }) {
+async function requestExtraction(extractor, payload) {
     const response = await fetch(`${apiBaseUrl}/extract`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(buildExtractionRequestBody({ extractor, text, texts, file_name, file_names })),
+        body: JSON.stringify(buildExtractionRequestBody({ ...payload, extractor })),
     })
     const data = await parseExtractionResponse(response)
 
@@ -236,11 +251,11 @@ async function requestExtraction(extractor, { text, texts, file_name, file_names
 /**
  * Calls the extraction API and returns the parsed response data.
  * Throws an Error with a readable message if the request fails.
- * @param {{ extractor: string, text: string, texts?: string[], file_name?: string, file_names?: string[] }} params
+ * @param {{ extractor: string, text: string, texts?: string[], file_name?: string, file_names?: string[], chunking?: { size: number, overlap: number }|null, page_offsets?: number[], page_offsets_list?: number[][] }} params
  * @returns {Promise<{ data: object, responseTimestamp: string|null }>}
  */
-export async function fetchExtraction({ extractor, text, texts, file_name, file_names }) {
-    const request = await requestExtraction(extractor, { text, texts, file_name, file_names })
+export async function fetchExtraction({ extractor, ...payload }) {
+    const request = await requestExtraction(extractor, payload)
 
     if (request.response.ok) {
         const responseTimestamp = request.response.headers.get('date')
@@ -251,4 +266,43 @@ export async function fetchExtraction({ extractor, text, texts, file_name, file_
     }
 
     throw new Error(getErrorMessage(request.data, extractor))
+}
+
+/**
+ * Uploads a file to the backend /parse endpoint and returns its extracted text.
+ * Parsing runs server-side (Docling), so this supports rich formats beyond PDF/TXT.
+ * `pageOffsets` holds the character offset at which each page starts, empty for
+ * formats with no pagination; it travels back to /extract so that every chunk —
+ * and therefore every triple — can be traced to a page.
+ * @param {File} file
+ * @returns {Promise<{ text: string, pageOffsets: number[] }>}
+ */
+export async function parseFile(file) {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    let response
+    try {
+        response = await fetch(`${apiBaseUrl}/parse`, {
+            method: 'POST',
+            body: formData,
+        })
+    } catch {
+        throw new Error(PARSE_REQUEST_ERROR)
+    }
+
+    if (!response.ok) {
+        const data = await response.json().catch(() => null)
+        throw new Error(
+            extractMessage(data?.detail)
+                || `${PARSE_REQUEST_ERROR} (HTTP ${response.status})`
+        )
+    }
+
+    const data = await response.json().catch(() => null)
+
+    return {
+        text: data?.content || '',
+        pageOffsets: Array.isArray(data?.page_offsets) ? data.page_offsets : [],
+    }
 }

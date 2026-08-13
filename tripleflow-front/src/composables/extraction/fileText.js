@@ -13,7 +13,11 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
-import { FILE_READ_ERROR } from './constants'
+import { parseFile } from './api'
+import {
+    FILE_READ_ERROR,
+    SUPPORTED_FILE_EXTENSIONS,
+} from './constants'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
@@ -35,6 +39,20 @@ export function isPdfFile(file) {
     return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 }
 
+/**
+ * Returns true if the file is one the pipeline accepts (.txt or .pdf).
+ * Independent of the parsing mode: both read the same formats.
+ * @param {File} file
+ */
+export function isSupportedFile(file) {
+    if (!file) {
+        return false
+    }
+
+    const name = file.name.toLowerCase()
+    return SUPPORTED_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))
+}
+
 /** Returns true if two File objects refer to the same file (same name, size, and last-modified timestamp). */
 export function isSameFile(firstFile, secondFile) {
     return firstFile.name === secondFile.name
@@ -53,15 +71,39 @@ export function buildFileKey(file) {
 }
 
 /**
- * Extracts plain text from a PDF file using pdf.js.
- * Pages are separated by double newlines; empty pages are skipped.
+ * Joins content from multiple files into a single string.
+ * If there is only one file, returns its content directly.
+ * Otherwise, each section is prefixed with a file name header.
+ * @param {{ name: string, content: string }[]} parts
+ * @returns {string}
+ */
+function formatCombinedFileText(parts) {
+    if (parts.length === 1) {
+        return parts[0].content.trim()
+    }
+
+    return parts
+        .map(({ name, content }) => `--- ${name} ---\n${content}`.trim())
+        .join('\n\n')
+        .trim()
+}
+
+/** Separates consecutive pages in the text built from a PDF. */
+const PAGE_SEPARATOR = '\n\n'
+
+/**
+ * Extracts plain text from a PDF file using pdf.js, in the browser.
+ * Pages are separated by double newlines; empty pages contribute no text but
+ * still claim an offset, so the pages after them keep their real numbers.
  * @param {File} file
- * @returns {Promise<string>}
+ * @returns {Promise<{ text: string, pageOffsets: number[] }>}
  */
 async function extractTextFromPdf(file) {
     const arrayBuffer = await file.arrayBuffer()
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
     const pagesText = []
+    const pageOffsets = []
+    let cursor = 0
 
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
         const page = await pdf.getPage(pageNumber)
@@ -72,12 +114,15 @@ async function extractTextFromPdf(file) {
             .replace(/\s+/g, ' ')
             .trim()
 
+        pageOffsets.push(cursor)
+
         if (pageText) {
             pagesText.push(pageText)
+            cursor += pageText.length + PAGE_SEPARATOR.length
         }
     }
 
-    return pagesText.join('\n\n').trim()
+    return { text: pagesText.join(PAGE_SEPARATOR), pageOffsets }
 }
 
 /**
@@ -102,33 +147,25 @@ function readTextFile(file) {
 }
 
 /**
- * Joins content from multiple files into a single string.
- * If there is only one file, returns its content directly.
- * Otherwise, each section is prefixed with a file name header.
- * @param {{ name: string, content: string }[]} parts
- * @returns {string}
+ * Reads a File object and returns its text content, along with the offset at
+ * which each page starts (empty for formats that have no pages).
+ * Advanced mode delegates to the backend /parse endpoint (Docling): richer
+ * Markdown output and many more formats, at the cost of a round-trip.
+ * Basic mode (the default) parses in the browser with pdf.js / FileReader.
+ * @param {File} file
+ * @param {boolean} advancedParsing
+ * @returns {Promise<{ text: string, pageOffsets: number[] }>}
  */
-function formatCombinedFileText(parts) {
-    if (parts.length === 1) {
-        return parts[0].content.trim()
+export async function readFileText(file, advancedParsing = false) {
+    if (advancedParsing) {
+        return parseFile(file)
     }
 
-    return parts
-        .map(({ name, content }) => `--- ${name} ---\n${content}`.trim())
-        .join('\n\n')
-        .trim()
-}
+    if (isPdfFile(file)) {
+        return extractTextFromPdf(file)
+    }
 
-/**
- * Reads a File object and returns its text content.
- * Supports PDF (via pdf.js) and plain text files.
- * @param {File} file
- * @returns {Promise<string>}
- */
-export async function readFileText(file) {
-    return isPdfFile(file)
-        ? await extractTextFromPdf(file)
-        : await readTextFile(file)
+    return { text: await readTextFile(file), pageOffsets: [] }
 }
 
 /**
@@ -148,16 +185,15 @@ export function buildTextFromEntries(entries) {
 /**
  * Reads all files in the array and combines their text content into a single string.
  * @param {File[]} files
+ * @param {boolean} advancedParsing
  * @returns {Promise<string>}
  */
-export async function buildTextFromFiles(files) {
+export async function buildTextFromFiles(files, advancedParsing = false) {
     const extractedParts = []
 
     for (const file of files) {
-        extractedParts.push({
-            name: file.name,
-            content: await readFileText(file),
-        })
+        const { text } = await readFileText(file, advancedParsing)
+        extractedParts.push({ name: file.name, content: text })
     }
 
     return formatCombinedFileText(extractedParts)

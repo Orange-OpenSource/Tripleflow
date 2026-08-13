@@ -24,6 +24,7 @@ from app.routes.extraction import router as extraction_router
 from app.routes.extractors import router as extractors_router
 from app.routes.files import router as files_router
 from app.routes.search import router as search_router
+from app.routes.sinks import router as sinks_router
 from app.routes.triples import router as triples_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +60,7 @@ app.include_router(extraction_router)
 app.include_router(extractors_router)
 app.include_router(files_router)
 app.include_router(search_router)
+app.include_router(sinks_router)
 app.include_router(triples_router)
 app.include_router(database_router)
 

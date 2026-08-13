@@ -18,6 +18,7 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
         <ValidationPage v-else-if="currentPage === 'validation'" />
         <GraphPage v-else-if="currentPage === 'graph'" />
         <ExtractorsPage v-else-if="currentPage === 'extractors'" />
+        <TargetsPage v-else-if="currentPage === 'targets'" />
         <FooterBar />
     </div>
 </template>
@@ -31,6 +32,7 @@ import HomePage from './pages/HomePage.vue'
 import ValidationPage from './pages/ValidationPage.vue'
 import GraphPage from './pages/GraphPage.vue'
 import ExtractorsPage from './pages/ExtractorsPage.vue'
+import TargetsPage from './pages/TargetsPage.vue'
 
 const currentPage = ref('home')
 const reviewerName = ref('')

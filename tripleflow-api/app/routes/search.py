@@ -1,15 +1,17 @@
-"""  
+"""
 Software Name : Tripleflow
 SPDX-FileCopyrightText: Copyright (c) Orange SA
 SPDX-License-Identifier: MIT
- 
+
 This software is distributed under the MIT License,
 see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
- 
+
 Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 
 """
+
+import os
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -19,7 +21,18 @@ router = APIRouter()
 # Public Wikidata search API, used when the extractor's knowledge base is
 # "wikidata" (or when no extractor is specified).
 WIKIDATA_SEARCH_API_URL = "https://www.wikidata.org/w/api.php"
-HTTP_CLIENT = httpx.AsyncClient(timeout=10.0, verify=False)
+
+# Wikimedia's robot policy requires callers to identify themselves, and answers
+# 403 to those that do not. Deployments should put a contact address in here:
+# https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy
+USER_AGENT = os.getenv(
+    "TRIPLEFLOW_USER_AGENT",
+    "TripleFlow/1.0 (open-source knowledge graph construction tool)",
+)
+
+HTTP_CLIENT = httpx.AsyncClient(
+    timeout=10.0, headers={"User-Agent": USER_AGENT}
+)
 
 
 def _resolve_search_api_url(extractor_id: str | None) -> str | None:
@@ -70,10 +83,14 @@ async def search_entities(
     try:
         response = await HTTP_CLIENT.get(search_api_url, params=params)
     except httpx.RequestError as exc:
-        raise HTTPException(status_code=503, detail=f"Entity search API unreachable: {exc}")
+        raise HTTPException(
+            status_code=503, detail=f"Entity search API unreachable: {exc}"
+        )
 
     if response.status_code != 200:
-        print(f"[search] Entity search API {response.status_code}: {response.text[:500]}")
+        print(
+            f"[search] Entity search API {response.status_code}: {response.text[:500]}"
+        )
         raise HTTPException(
             status_code=502,
             detail=f"Entity search API returned {response.status_code}: {response.text[:300]}",

@@ -12,15 +12,21 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
 """
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 from typing import Optional
 from app.services.triple_db_service import (
     delete_file,
     get_files,
     get_triples,
     get_file_content,
+    rename_file,
 )
 
 router = APIRouter(prefix="/files", tags=["files"])
+
+
+class RenameFileRequest(BaseModel):
+    file_name: str = Field(..., min_length=1, max_length=255)
 
 
 # Returns all files with their review progress counts
@@ -47,6 +53,15 @@ def list_file_triples(
 ):
     triples = get_triples(file_id=file_id, status=status)
     return {"triples": triples, "count": len(triples)}
+
+
+# Renames a file. The new name is shared by every reviewer, unlike a local relabelling.
+@router.patch("/{file_id}")
+def rename(file_id: str, req: RenameFileRequest):
+    try:
+        return {"message": "File renamed", **rename_file(file_id, req.file_name)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # Deletes a file and all of its triples. The reviewer name is required and audited.

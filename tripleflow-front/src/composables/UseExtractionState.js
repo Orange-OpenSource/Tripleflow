@@ -1,13 +1,13 @@
-/*  
+/*
 Software Name : Tripleflow
 SPDX-FileCopyrightText: Copyright (c) Orange SA
 SPDX-License-Identifier: MIT
- 
+
 This software is distributed under the MIT License,
 see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
- 
+
 Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 
 */
 
@@ -19,15 +19,14 @@ import {
     EXTRACTOR_REQUIRED_ERROR,
     FILE_READ_ERROR,
     INPUT_REQUIRED_ERROR,
-    SUPPORTED_FILE_ERROR,
+    UNSUPPORTED_FILE_ERROR,
 } from './extraction/constants'
 import {
     buildFileKey,
     buildSelectedFileName,
     buildTextFromEntries,
-    isPdfFile,
     isSameFile,
-    isTxtFile,
+    isSupportedFile,
     readFileText,
 } from './extraction/fileText'
 import { normalizeTriples } from './extraction/normalizers'
@@ -45,11 +44,33 @@ function createInitialResult() {
 }
 
 /**
+ * Realigns page offsets on the text actually sent, which is trimmed before it
+ * leaves the browser. Parsers already return trimmed text, so this is normally a
+ * no-op — it just keeps the offsets honest if one ever stops doing so.
+ * @param {number[]|undefined} pageOffsets
+ * @param {string} rawEntryText
+ * @returns {number[]}
+ */
+function realignPageOffsets(pageOffsets, rawEntryText) {
+    if (!Array.isArray(pageOffsets) || pageOffsets.length === 0) {
+        return []
+    }
+
+    const shift = rawEntryText.length - rawEntryText.trimStart().length
+
+    return shift === 0
+        ? pageOffsets
+        : pageOffsets.map((offset) => Math.max(0, offset - shift))
+}
+
+/**
  * Builds the extraction request payload from the current text and file inputs.
  * Uses the batch form (texts[]) when more than one file is loaded.
+ * Page offsets travel with each text so the backend can resolve the chunk a
+ * triple came from to a page number.
  * @param {string} text - combined text value
- * @param {{ name: string, text: string }[]} fileTextInputs
- * @returns {{ text: string, texts: string[], file_name?: string|null, file_names?: (string|null)[] }}
+ * @param {{ name: string, text: string, pageOffsets?: number[] }[]} fileTextInputs
+ * @returns {{ text: string, texts: string[], file_name?: string|null, file_names?: (string|null)[], page_offsets?: number[], page_offsets_list?: number[][] }}
  */
 function getRequestPayload(text, fileTextInputs) {
     const validInputs = Array.isArray(fileTextInputs)
@@ -63,6 +84,9 @@ function getRequestPayload(text, fileTextInputs) {
             text,
             texts: sanitizedTexts,
             file_names: validInputs.map((entry) => entry.name || null),
+            page_offsets_list: validInputs.map(
+                (entry) => realignPageOffsets(entry.pageOffsets, entry.text)
+            ),
         }
     }
 
@@ -70,6 +94,9 @@ function getRequestPayload(text, fileTextInputs) {
         text,
         texts: [],
         file_name: validInputs[0]?.name || null,
+        page_offsets: validInputs[0]
+            ? realignPageOffsets(validInputs[0].pageOffsets, validInputs[0].text)
+            : [],
     }
 }
 
@@ -133,6 +160,24 @@ function buildInputSources(rawText, fileTextInputs) {
 function createExtractionState() {
     const rawText = ref('')
     const fileTextInputs = ref([])
+
+    // Optional preprocessing bricks. When enabled they appear as extra nodes in
+    // the visual pipeline, between Input and Extraction:
+    // Input → [Parsing/Docling] → [Chunking] → Extraction.
+    // parsingEnabled routes file parsing to the backend /parse endpoint (Docling);
+    // when off, files are parsed in the browser with pdf.js (PDF) / FileReader (TXT).
+    const parsingEnabled = ref(false)
+    // Progress of the file-reading step, which runs before extraction: isParsing
+    // drives the spinner, parsingProgress labels it ("2/3 — report.pdf").
+    const isParsing = ref(false)
+    const parsingProgress = ref({ current: 0, total: 0, name: '' })
+    // Chunk sizes are token counts, matching what the backend tokenizer measures.
+    const chunkingEnabled = ref(false)
+    const chunkSize = ref(512)
+    const chunkOverlap = ref(50)
+    // Number of chunks the backend actually produced on the last run, shown in
+    // the workflow node. Null when chunking was off.
+    const chunkCount = ref(null)
 
     // No default selection: the available extractors are instance-specific and
     // served by the backend, so the user picks one once the list is loaded.
@@ -200,6 +245,7 @@ function createExtractionState() {
         clearTimers()
         resetTimingState()
         extractorErrors.value = {}
+        chunkCount.value = null
         result.value = createInitialResult()
     }
 
@@ -306,7 +352,33 @@ function createExtractionState() {
         return entry.fileKey.startsWith(MANUAL_KEY_PREFIX)
     }
 
-    async function syncTextFromSelectedFiles(files) {
+    /** Opens the parsing progress state for a batch of files. No-op when nothing has to be read. */
+    function startParsing(total) {
+        if (total <= 0) {
+            return
+        }
+
+        isParsing.value = true
+        parsingProgress.value = { current: 0, total, name: '' }
+    }
+
+    /** Marks the file currently being read, so the spinner can name it. */
+    function trackParsedFile(name) {
+        parsingProgress.value = {
+            ...parsingProgress.value,
+            current: parsingProgress.value.current + 1,
+            name,
+        }
+    }
+
+    function stopParsing() {
+        isParsing.value = false
+        parsingProgress.value = { current: 0, total: 0, name: '' }
+    }
+
+    // reparseAll forces already-read files to be parsed again, used when the user
+    // toggles the Docling parsing switch so the preview reflects the new mode.
+    async function syncTextFromSelectedFiles(files, { reparseAll = false } = {}) {
         const manualEntries = fileTextInputs.value.filter(isManualEntry)
 
         if (files.length === 0) {
@@ -320,21 +392,37 @@ function createExtractionState() {
         )
 
         const nextEntries = []
+        const pendingCount = files.filter(
+            (file) => reparseAll || !currentEntries.has(buildFileKey(file))
+        ).length
 
-        for (const file of files) {
-            const fileKey = buildFileKey(file)
-            const existingEntry = currentEntries.get(fileKey)
+        startParsing(pendingCount)
 
-            if (existingEntry) {
-                nextEntries.push(existingEntry)
-                continue
+        try {
+            for (const file of files) {
+                const fileKey = buildFileKey(file)
+                const existingEntry = currentEntries.get(fileKey)
+
+                if (existingEntry && !reparseAll) {
+                    nextEntries.push(existingEntry)
+                    continue
+                }
+
+                trackParsedFile(file.name)
+
+                const { text: parsedText, pageOffsets } = await readFileText(
+                    file, parsingEnabled.value
+                )
+
+                nextEntries.push({
+                    fileKey,
+                    name: file.name,
+                    text: parsedText,
+                    pageOffsets,
+                })
             }
-
-            nextEntries.push({
-                fileKey,
-                name: file.name,
-                text: await readFileText(file),
-            })
+        } finally {
+            stopParsing()
         }
 
         const allEntries = [...nextEntries, ...manualEntries]
@@ -347,9 +435,9 @@ function createExtractionState() {
             return
         }
 
-        const supportedFiles = files.filter((file) => isTxtFile(file) || isPdfFile(file))
+        const supportedFiles = files.filter(isSupportedFile)
         if (supportedFiles.length === 0) {
-            setGlobalError(SUPPORTED_FILE_ERROR)
+            setGlobalError(UNSUPPORTED_FILE_ERROR)
             return
         }
 
@@ -372,6 +460,32 @@ function createExtractionState() {
         }
     }
 
+    /**
+     * Switches the parsing mode and re-parses the already selected files so the
+     * preview matches the new mode. Both modes read the same formats, so the
+     * selection itself is never affected — only how each PDF is turned into text.
+     */
+    async function setParsingEnabled(value) {
+        const enabled = Boolean(value)
+        if (enabled === parsingEnabled.value) {
+            return
+        }
+
+        parsingEnabled.value = enabled
+
+        if (selectedFiles.value.length === 0) {
+            return
+        }
+
+        try {
+            resetExtractionFeedback()
+            await syncTextFromSelectedFiles(selectedFiles.value, { reparseAll: true })
+        } catch (error) {
+            parsingEnabled.value = !enabled
+            setGlobalError(error?.message || FILE_READ_ERROR)
+        }
+    }
+
     function clearText() {
         resetExtractionFeedback()
         resetInputState()
@@ -382,9 +496,12 @@ function createExtractionState() {
             return
         }
 
+        // Editing the text moves everything after the edit, so the page offsets
+        // the parser reported no longer describe it. Dropping them costs the page
+        // number on those triples; keeping them would point at the wrong page.
         fileTextInputs.value = fileTextInputs.value.map((entry, entryIndex) => (
             entryIndex === index
-                ? { ...entry, text: value }
+                ? { ...entry, text: value, pageOffsets: [] }
                 : entry
         ))
     }
@@ -468,8 +585,17 @@ function createExtractionState() {
                 texts: requestPayload.texts,
                 file_name: requestPayload.file_name,
                 file_names: requestPayload.file_names,
+                page_offsets: requestPayload.page_offsets,
+                page_offsets_list: requestPayload.page_offsets_list,
+                chunking: chunkingEnabled.value
+                    ? { size: chunkSize.value, overlap: chunkOverlap.value }
+                    : null,
             })
             const data = extractionResponse?.data
+
+            if (typeof data?.result?.chunk_count === 'number') {
+                chunkCount.value = data.result.chunk_count
+            }
             const extractionTimestamp = extractionResponse?.responseTimestamp || requestStartedAt
             const normalizedTriples = normalizeTriples(data, {
                 inputSources,
@@ -552,6 +678,14 @@ function createExtractionState() {
         selectedFiles,
         selectedExtractors,
         selectedFileName,
+        parsingEnabled,
+        setParsingEnabled,
+        isParsing,
+        parsingProgress,
+        chunkingEnabled,
+        chunkSize,
+        chunkOverlap,
+        chunkCount,
         result,
         loadingByExtractor,
         elapsedTime,

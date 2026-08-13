@@ -1,13 +1,13 @@
-<!--  
+<!--
 Software Name : Tripleflow
 SPDX-FileCopyrightText: Copyright (c) Orange SA
 SPDX-License-Identifier: MIT
- 
+
 This software is distributed under the MIT License,
 see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
- 
+
 Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 
 -->
 
@@ -23,7 +23,7 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
             @focus="onFocus"
         />
 
-        <ul v-if="open && (suggestions.length > 0 || canCreate)" class="ac-dropdown" role="listbox">
+        <ul v-if="open && suggestions.length > 0" class="ac-dropdown" role="listbox">
             <li
                 v-for="(s, i) in suggestions"
                 :key="s.id || i"
@@ -36,10 +36,6 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
                 <span class="ac-id">{{ s.id }}</span>
                 <span v-if="s.description" class="ac-desc">{{ s.description }}</span>
             </li>
-
-            <li v-if="canCreate" class="ac-item ac-create" @mousedown.prevent @click="openCreateForm">
-                + Create "{{ searchQuery }}"
-            </li>
         </ul>
 
         <div v-else-if="open && isSearching" class="ac-state">Searching…</div>
@@ -50,24 +46,6 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
             placeholder="ID (optional)"
             @input="$emit('update:modelValue', { ...modelValue, id: $event.target.value })"
         />
-
-        <div v-if="showCreateForm" class="create-form">
-            <p class="create-title">New {{ type }}</p>
-            <div class="create-fields">
-                <div class="create-field">
-                    <label class="create-label">Label</label>
-                    <input class="edit-input" v-model="createLabel" placeholder="Label" />
-                </div>
-                <div class="create-field">
-                    <label class="create-label">Alias</label>
-                    <input class="edit-input" v-model="createAlias" placeholder="Alias (optional)" />
-                </div>
-            </div>
-            <div class="create-actions">
-                <button type="button" class="btn-create" @click="confirmCreate">Create</button>
-                <button type="button" class="btn-cancel" @click="cancelCreate">Cancel</button>
-            </div>
-        </div>
     </div>
 </template>
 
@@ -77,9 +55,9 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
  * through the backend /search/entities proxy. The backend picks the search API
  * from the extractor's declared knowledge base (public Wikidata by default).
  * Emits 'update:modelValue' with { label, id } on selection or manual input.
- * Supports keyboard navigation and an inline form to create new entities.
+ * Supports keyboard navigation.
  */
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 
 import { DEFAULT_API_BASE_URL } from '../../composables/extraction/constants'
 
@@ -95,14 +73,7 @@ const suggestions = ref([])
 const isSearching = ref(false)
 const open = ref(false)
 const activeIndex = ref(-1)
-const searchQuery = ref('')
 let timer = null
-
-const showCreateForm = ref(false)
-const createLabel = ref('')
-const createAlias = ref('')
-
-const canCreate = computed(() => searchQuery.value.length >= 2 && !isSearching.value)
 
 /**
  * Fires a search request to the backend entity-search proxy and populates the
@@ -145,7 +116,6 @@ function clear() {
 
 /** Handles text input: updates modelValue, resets the ID, and triggers a debounced search. */
 function onLabelInput(e) {
-    searchQuery.value = e.target.value
     emit('update:modelValue', { ...props.modelValue, label: e.target.value, id: '' })
     open.value = true
     activeIndex.value = -1
@@ -162,25 +132,6 @@ function select(s) {
     emit('update:modelValue', { label: s.label, id: s.id })
     open.value = false
     clear()
-}
-
-/** Opens the inline creation form pre-filled with the current search query. */
-function openCreateForm() {
-    createLabel.value = searchQuery.value
-    createAlias.value = ''
-    open.value = false
-    showCreateForm.value = true
-}
-
-/** Emits a new entity with the entered label (ID left empty) and closes the creation form. */
-function confirmCreate() {
-    emit('update:modelValue', { label: createLabel.value, id: '' })
-    showCreateForm.value = false
-}
-
-/** Closes the creation form without emitting a value. */
-function cancelCreate() {
-    showCreateForm.value = false
 }
 
 /** Handles keyboard navigation (ArrowUp/Down to move, Enter to select, Escape to close). */
@@ -258,19 +209,6 @@ function onContainerFocusout(e) {
     color: rgba(255, 255, 255, 0.8);
 }
 
-.ac-create {
-    display: block;
-    border-top: 0.1rem solid #eee;
-    font-size: 0.8rem;
-    color: #ff7900;
-    font-weight: 500;
-}
-
-.ac-create:hover {
-    background: rgba(255, 121, 0, 0.08);
-    color: #ff7900;
-}
-
 .ac-label {
     font-size: 0.85rem;
     font-weight: 500;
@@ -329,76 +267,5 @@ function onContainerFocusout(e) {
 .edit-input-id {
     font-size: 0.75rem;
     color: #595959;
-}
-
-.create-form {
-    border: 0.1rem solid #ddd;
-    border-radius: 0.25rem;
-    padding: 0.75rem;
-    background: #fff;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.create-title {
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-weight: 700;
-    color: #595959;
-    margin: 0;
-}
-
-.create-fields {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-}
-
-.create-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-.create-label {
-    font-size: 0.7rem;
-    color: #999;
-}
-
-.create-actions {
-    display: flex;
-    gap: 0.5rem;
-}
-
-.btn-create {
-    font-size: 0.8rem;
-    font-family: inherit;
-    padding: 0.25rem 0.75rem;
-    background: #ff7900;
-    color: #fff;
-    border: none;
-    border-radius: 0.25rem;
-    cursor: pointer;
-}
-
-.btn-create:hover {
-    background: #f16e00;
-}
-
-.btn-cancel {
-    font-size: 0.8rem;
-    font-family: inherit;
-    padding: 0.25rem 0.75rem;
-    background: transparent;
-    color: #595959;
-    border: 0.1rem solid #ddd;
-    border-radius: 0.25rem;
-    cursor: pointer;
-}
-
-.btn-cancel:hover {
-    border-color: #999;
 }
 </style>

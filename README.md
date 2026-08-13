@@ -6,31 +6,47 @@
 
 ## Table of contents
 
-- [Quick start](#quick-start)
-- [Bugs and feature requests](#bugs-and-feature-requests)
-- [Contributing](#contributing)
-- [Versioning](#versioning)
-- [Copyright and license](#copyright-and-license)
+- [Tripleflow](#tripleflow)
+  - [Table of contents](#table-of-contents)
+  - [Quick start](#quick-start)
+    - [System requirements](#system-requirements)
+    - [Configuration](#configuration)
+    - [Installation and launch with Python and Vue.js](#installation-and-launch-with-python-and-vuejs)
+    - [Installation and launch with Docker](#installation-and-launch-with-docker)
+  - [Bugs and feature requests](#bugs-and-feature-requests)
+  - [Contributing](#contributing)
+  - [Versioning](#versioning)
+  - [Copyright and license](#copyright-and-license)
 
 ## Quick start
 
 ### System requirements
 
-- Python 3.8 or higher. 
-- Node / NPM 
+- Python 3.11 or higher.
+- Node / NPM
 - Docker
 - Make
+- MongoDB instance
+
+### Configuration
+Both services read their settings from environment files. Copy the templates and fill in your values before the first launch:
+
+```bash
+cp tripleflow-api/.env.template tripleflow-api/.env
+cp tripleflow-front/.env.template tripleflow-front/.env.local
+```
+`MONGO_URI` is required, the API fails to start without it. Every other variable is optional and documented in the templates.
 
 ### Installation and launch with Python and Vue.js
 
 1. Dependency installation
 
 ```bash
-cd tripleflow-api && python3 -m pip install -r requirements.txt && uvicorn app.main:app
+cd tripleflow-api && python3 -m pip install -r requirements.txt
 ```
 
 ```bash
-cd tripleflow-front && npm install && npm run dev
+cd tripleflow-front && npm install
 ```
 
 2. Launch app
@@ -45,7 +61,7 @@ cd tripleflow-front && npm install && npm run dev
 
 ### Installation and launch with Docker
 
-1. API 
+1. API
 
 ```bash
 cd tripleflow-api && make docker-build

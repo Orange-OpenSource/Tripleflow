@@ -44,6 +44,12 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
           href="#"
           @click.prevent="emit('navigate', 'extractors')"
         >Extractors</a>
+        <a
+          class="nav-link"
+          :class="{ active: currentPage === 'targets' }"
+          href="#"
+          @click.prevent="emit('navigate', 'targets')"
+        >Targets</a>
       </nav>
 
     </div>
@@ -53,8 +59,8 @@ Software description: Tripleflow is a tool that enables semi-supervised data fee
 
 <script setup>
 /**
- * Top navigation bar with the TripleFlow logo and links to Extraction and Validation pages.
- * Emits 'navigate' with the target page name ('home' or 'validation') when a link is clicked.
+ * Top navigation bar with the TripleFlow logo and links to every page.
+ * Emits 'navigate' with the target page name when a link is clicked.
  */
 defineProps({
   currentPage: {
