@@ -1,13 +1,13 @@
-#  
+#
 # Software Name : Tripleflow
 # SPDX-FileCopyrightText: Copyright (c) Orange SA
 # SPDX-License-Identifier: MIT
-# 
+#
 # This software is distributed under the MIT License,
 # see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
-# 
+#
 # Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-# Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+# Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 #
 
 FROM node:24 AS build
@@ -33,6 +33,6 @@ RUN npm run build
 
 RUN npm install -g serve
 
-EXPOSE 80
+EXPOSE 8080
 
-CMD ["serve", "-s", "dist", "-l", "80"]
+CMD ["serve", "-s", "dist", "-l", "8080"]
