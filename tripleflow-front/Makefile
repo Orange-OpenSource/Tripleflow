@@ -19,8 +19,7 @@ docker-run:
 		docker rm -f tripleflow-frontend; \
 		sleep 2; \
 	fi
-	docker run -d --restart unless-stopped --network --name tripleflow-frontend -p 8080:8080 tripleflow-frontend:latest
+	docker run -d --restart unless-stopped --name tripleflow-frontend -p 8080:8080 tripleflow-frontend:latest
 
 docker-stop:
 	docker rm -f tripleflow-frontend
-
