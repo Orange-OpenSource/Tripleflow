@@ -9,6 +9,7 @@ import httpx
 
 from app.db import sinks_collection
 from app.schemas.sinks import PLACEHOLDER_RE, SinkConfig
+
 # Same dot-path semantics as the extractor registry uses to read an arbitrary
 # response. One implementation, so a path means the same thing on both sides.
 from app.services.extractors_service import _resolve_dot_path
@@ -63,7 +64,11 @@ def _to_public(doc: dict) -> dict:
 
 def list_sinks() -> list[dict]:
     """Returns the publication targets registered in the database."""
-    return [_to_public(doc) for doc in sinks_collection.find({}, {"_id": 0}) if doc.get("id")]
+    return [
+        _to_public(doc)
+        for doc in sinks_collection.find({}, {"_id": 0})
+        if doc.get("id")
+    ]
 
 
 def get_sink(sink_id: str) -> dict | None:
@@ -99,21 +104,32 @@ def _entity_id(node: object) -> str:
     return str(node.get("id") or "").strip()
 
 
-def _triple_iris(triple: dict, namespaces: dict) -> tuple[str, str, str] | None:
+def _triple_iris(
+    triple: dict, namespaces: dict
+) -> tuple[str, str, str] | None:
     """
     Maps a triple's subject/predicate/object IDs onto absolute IRIs.
     Returns None when any node lacks a well-formed Wikibase-style ID: those
     triples cannot be expressed in the target graph and are reported as skipped
     instead of being silently dropped.
     """
-    item_base = namespaces.get("item_base_uri") or "http://www.wikidata.org/entity/"
-    property_base = namespaces.get("property_base_uri") or "http://www.wikidata.org/prop/direct/"
+    item_base = (
+        namespaces.get("item_base_uri") or "http://www.wikidata.org/entity/"
+    )
+    property_base = (
+        namespaces.get("property_base_uri")
+        or "http://www.wikidata.org/prop/direct/"
+    )
 
     subject_id = _entity_id(triple.get("subject"))
     predicate_id = _entity_id(triple.get("predicate"))
     object_id = _entity_id(triple.get("obj"))
 
-    if not (ITEM_ID_RE.match(subject_id) and PROPERTY_ID_RE.match(predicate_id) and ITEM_ID_RE.match(object_id)):
+    if not (
+        ITEM_ID_RE.match(subject_id)
+        and PROPERTY_ID_RE.match(predicate_id)
+        and ITEM_ID_RE.match(object_id)
+    ):
         return None
 
     return (
@@ -129,7 +145,14 @@ def _is_safe_iri(iri: str) -> bool:
     constrained to Q/P + digits and bases are validated at config time, so this
     is a last line of defence rather than the primary one.
     """
-    return not any(char in iri for char in ' <>"{}|\\^`') and "\n" not in iri and "\r" not in iri
+    return (
+        not any(char in iri for char in ' <>"{}|\\^`')
+        and "\n" not in iri
+        and "\r" not in iri
+    )
+
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
 def _escape_literal(value: str) -> str:
@@ -139,7 +162,7 @@ def _escape_literal(value: str) -> str:
     could influence: a stray quote or brace must never break out of the literal.
     The backslash pass has to come first, or it would re-escape its own output.
     """
-    return (
+    result = (
         str(value)
         .replace("\\", "\\\\")
         .replace('"', '\\"')
@@ -147,6 +170,7 @@ def _escape_literal(value: str) -> str:
         .replace("\r", "\\r")
         .replace("\t", "\\t")
     )
+    return _CONTROL_CHAR_RE.sub(lambda m: f"\\u{ord(m.group()):04X}", result)
 
 
 def _entity_label(node: object) -> str:
@@ -155,7 +179,9 @@ def _entity_label(node: object) -> str:
     return str(node.get("label") or "").strip()
 
 
-def _template_values(triple: dict, sink: dict, iris: tuple[str, str, str], user_name: str) -> dict:
+def _template_values(
+    triple: dict, sink: dict, iris: tuple[str, str, str], user_name: str
+) -> dict:
     """
     Builds the substitution map for one triple. IRI values are already validated
     and go in verbatim; every other value is escaped as a string literal here, so
@@ -186,17 +212,23 @@ def _template_values(triple: dict, sink: dict, iris: tuple[str, str, str], user_
         "now": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "uuid": str(uuid.uuid4()).upper(),
     }
-    values.update({key: _escape_literal(value) for key, value in literals.items()})
+    values.update(
+        {key: _escape_literal(value) for key, value in literals.items()}
+    )
 
     return values
 
 
 def _render_template(template: str, values: dict) -> str:
     """Substitutes {{placeholder}} occurrences. Unknown names are rejected at config time."""
-    return PLACEHOLDER_RE.sub(lambda match: values.get(match.group(1), ""), template)
+    return PLACEHOLDER_RE.sub(
+        lambda match: values.get(match.group(1), ""), template
+    )
 
 
-def build_update(triples: list[dict], sink: dict, user_name: str = "") -> tuple[str, list[dict]]:
+def build_update(
+    triples: list[dict], sink: dict, user_name: str = ""
+) -> tuple[str, list[dict]]:
     """
     Builds the SPARQL 1.1 update sent to the sink, and returns it along with the
     triples that could not be mapped.
@@ -223,14 +255,21 @@ def build_update(triples: list[dict], sink: dict, user_name: str = "") -> tuple[
         iris = _triple_iris(triple, namespaces)
 
         if iris is None:
-            skipped.append({
-                "triple_id": triple_id,
-                "reason": "subject, predicate or object has no resolved Q/P identifier",
-            })
+            skipped.append(
+                {
+                    "triple_id": triple_id,
+                    "reason": "subject, predicate or object has no resolved Q/P identifier",
+                }
+            )
             continue
 
         if not all(_is_safe_iri(iri) for iri in iris):
-            skipped.append({"triple_id": triple_id, "reason": "resolved IRI contains illegal characters"})
+            skipped.append(
+                {
+                    "triple_id": triple_id,
+                    "reason": "resolved IRI contains illegal characters",
+                }
+            )
             continue
 
         if template:
@@ -238,7 +277,9 @@ def build_update(triples: list[dict], sink: dict, user_name: str = "") -> tuple[
             parts.append(_render_template(template, values))
         else:
             subject_iri, predicate_iri, object_iri = iris
-            parts.append(f"    <{subject_iri}> <{predicate_iri}> <{object_iri}> .")
+            parts.append(
+                f"    <{subject_iri}> <{predicate_iri}> <{object_iri}> ."
+            )
 
     if not parts:
         return "", skipped
@@ -251,7 +292,11 @@ def build_update(triples: list[dict], sink: dict, user_name: str = "") -> tuple[
 
     body = "\n".join(parts)
     if graph_uri:
-        return prologue + f"INSERT DATA {{\n  GRAPH <{graph_uri}> {{\n{body}\n  }}\n}}", skipped
+        return (
+            prologue
+            + f"INSERT DATA {{\n  GRAPH <{graph_uri}> {{\n{body}\n  }}\n}}",
+            skipped,
+        )
     return prologue + f"INSERT DATA {{\n{body}\n}}", skipped
 
 
@@ -274,7 +319,11 @@ def _json_escape(value: str) -> str:
 
 
 def _http_template_values(
-    triple: dict, sink: dict, iris: tuple[str, str, str], user_name: str, captured: dict
+    triple: dict,
+    sink: dict,
+    iris: tuple[str, str, str],
+    user_name: str,
+    captured: dict,
 ) -> dict:
     """
     Builds the substitution map for one triple on an HTTP target.
@@ -305,12 +354,20 @@ def _http_template_values(
         "triple_id": triple.get("triple_id") or "",
         "reviewer": user_name,
         "source_file": source.get("file_name") or "",
-        "extractors": ", ".join(str(e) for e in (source.get("extractors") or [])),
+        "extractors": ", ".join(
+            str(e) for e in (source.get("extractors") or [])
+        ),
         "now": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "uuid": str(uuid.uuid4()).upper(),
     }
 
-    for name in ("subject_label", "predicate_label", "object_label", "source_file", "reviewer"):
+    for name in (
+        "subject_label",
+        "predicate_label",
+        "object_label",
+        "source_file",
+        "reviewer",
+    ):
         values[f"{name}_json"] = _json_escape(values[name])
 
     # Captured values last: a prepare step cannot shadow a built-in slot, that is
@@ -323,10 +380,14 @@ def _http_template_values(
 def _render_http_template(template: object, values: dict) -> object:
     """Substitutes {{slot}} in every string of a JSON-shaped template."""
     if isinstance(template, str):
-        return PLACEHOLDER_RE.sub(lambda m: str(values.get(m.group(1), "")), template)
+        return PLACEHOLDER_RE.sub(
+            lambda m: str(values.get(m.group(1), "")), template
+        )
     if isinstance(template, dict):
         return {
-            _render_http_template(key, values): _render_http_template(value, values)
+            _render_http_template(key, values): _render_http_template(
+                value, values
+            )
             for key, value in template.items()
         }
     if isinstance(template, list):
@@ -347,10 +408,14 @@ def _http_body_kwargs(body_type: str, rendered: object) -> tuple[dict, str]:
         }
         return {"data": data}, urlencode(data)
 
-    return {"json": rendered}, json.dumps(rendered, ensure_ascii=False, indent=2)
+    return {"json": rendered}, json.dumps(
+        rendered, ensure_ascii=False, indent=2
+    )
 
 
-def _response_error(response: httpx.Response, error_path: str | None) -> str | None:
+def _response_error(
+    response: httpx.Response, error_path: str | None
+) -> str | None:
     """
     Returns why a call failed, or None when it succeeded.
 
@@ -374,7 +439,11 @@ def _response_error(response: httpx.Response, error_path: str | None) -> str | N
     if problem is None or problem == "" or problem == [] or problem == {}:
         return None
 
-    return json.dumps(problem, ensure_ascii=False) if isinstance(problem, (dict, list)) else str(problem)
+    return (
+        json.dumps(problem, ensure_ascii=False)
+        if isinstance(problem, (dict, list))
+        else str(problem)
+    )
 
 
 async def _run_prepare_steps(client: httpx.AsyncClient, sink: dict) -> dict:
@@ -395,7 +464,9 @@ async def _run_prepare_steps(client: httpx.AsyncClient, sink: dict) -> dict:
         if step.get("method", "GET").upper() == "POST":
             body_kwargs, _ = _http_body_kwargs(
                 step.get("body_type", "form"),
-                _render_http_template(step.get("body_template") or {}, captured),
+                _render_http_template(
+                    step.get("body_template") or {}, captured
+                ),
             )
             kwargs.update(body_kwargs)
             request = client.post
@@ -405,9 +476,13 @@ async def _run_prepare_steps(client: httpx.AsyncClient, sink: dict) -> dict:
         try:
             response = await request(url, timeout=timeout, **kwargs)
         except httpx.TimeoutException:
-            raise RuntimeError(f"Preparation step '{name}' timed out after {timeout}s calling {url}")
+            raise RuntimeError(
+                f"Preparation step '{name}' timed out after {timeout}s calling {url}"
+            )
         except httpx.RequestError as exc:
-            raise RuntimeError(f"Preparation step '{name}' request error: {exc}")
+            raise RuntimeError(
+                f"Preparation step '{name}' request error: {exc}"
+            )
 
         problem = _response_error(response, None)
         if problem:
@@ -416,7 +491,9 @@ async def _run_prepare_steps(client: httpx.AsyncClient, sink: dict) -> dict:
         try:
             payload = response.json()
         except ValueError:
-            raise RuntimeError(f"Preparation step '{name}' did not return JSON")
+            raise RuntimeError(
+                f"Preparation step '{name}' did not return JSON"
+            )
 
         for slot, path in (step.get("capture") or {}).items():
             value = _resolve_dot_path(payload, path)
@@ -447,25 +524,31 @@ def build_http_requests(
         iris = _triple_iris(triple, namespaces)
 
         if iris is None:
-            skipped.append({
-                "triple_id": triple_id,
-                "reason": "subject, predicate or object has no resolved Q/P identifier",
-            })
+            skipped.append(
+                {
+                    "triple_id": triple_id,
+                    "reason": "subject, predicate or object has no resolved Q/P identifier",
+                }
+            )
             continue
 
         values = _http_template_values(triple, sink, iris, user_name, captured)
-        rendered = _render_http_template(request_config["body_template"], values)
+        rendered = _render_http_template(
+            request_config["body_template"], values
+        )
         body_kwargs, body_text = _http_body_kwargs(
             request_config.get("body_type", "form"), rendered
         )
 
-        prepared.append({
-            "triple_id": triple_id,
-            "method": request_config.get("method", "POST").upper(),
-            "url": _render_http_template(request_config["url"], values),
-            "body": body_text,
-            "kwargs": body_kwargs,
-        })
+        prepared.append(
+            {
+                "triple_id": triple_id,
+                "method": request_config.get("method", "POST").upper(),
+                "url": _render_http_template(request_config["url"], values),
+                "body": body_text,
+                "kwargs": body_kwargs,
+            }
+        )
 
     return prepared, skipped
 
@@ -489,9 +572,13 @@ async def publish_http(
 
     # Its own client, kept for the whole run: prepare steps and writes must share
     # a session, and its cookie jar must not outlive the publication.
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=True
+    ) as client:
         captured = await _run_prepare_steps(client, sink)
-        prepared, skipped = build_http_requests(triples, sink, user_name, captured)
+        prepared, skipped = build_http_requests(
+            triples, sink, user_name, captured
+        )
 
         if dry_run:
             return [], skipped, prepared
@@ -509,21 +596,27 @@ async def publish_http(
                     **call["kwargs"],
                 )
             except httpx.TimeoutException:
-                skipped.append({
-                    "triple_id": call["triple_id"],
-                    "reason": f"timed out after {timeout}s calling {call['url']}",
-                })
+                skipped.append(
+                    {
+                        "triple_id": call["triple_id"],
+                        "reason": f"timed out after {timeout}s calling {call['url']}",
+                    }
+                )
                 continue
             except httpx.RequestError as exc:
-                skipped.append({
-                    "triple_id": call["triple_id"],
-                    "reason": f"request error: {exc}",
-                })
+                skipped.append(
+                    {
+                        "triple_id": call["triple_id"],
+                        "reason": f"request error: {exc}",
+                    }
+                )
                 continue
 
             problem = _response_error(response, error_path)
             if problem:
-                skipped.append({"triple_id": call["triple_id"], "reason": problem})
+                skipped.append(
+                    {"triple_id": call["triple_id"], "reason": problem}
+                )
                 continue
 
             published.append(call["triple_id"])
@@ -575,7 +668,10 @@ def _request_kwargs(sink: dict, content_type: str | None = "") -> dict:
     kwargs: dict = {}
 
     if auth_type == "basic":
-        kwargs["auth"] = (auth.get("username") or "", auth.get("password") or "")
+        kwargs["auth"] = (
+            auth.get("username") or "",
+            auth.get("password") or "",
+        )
     elif auth_type == "header":
         headers.update(auth.get("headers") or {})
 
