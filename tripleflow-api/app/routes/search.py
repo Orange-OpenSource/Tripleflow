@@ -31,7 +31,11 @@ USER_AGENT = os.getenv(
 )
 
 HTTP_CLIENT = httpx.AsyncClient(
-    timeout=10.0, headers={"User-Agent": USER_AGENT}
+    timeout=10.0,
+    headers={"User-Agent": USER_AGENT},
+    # TLS verification is disabled to get through the corporate proxy, whose
+    # interception certificate is not in the container's CA bundle.
+    verify=False,
 )
 
 

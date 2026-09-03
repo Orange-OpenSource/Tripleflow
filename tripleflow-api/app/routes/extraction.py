@@ -215,6 +215,17 @@ async def _extract_chunked_triples(
     return dedupe_triples(triples), len(chunks)
 
 
+# Identifies the document a run is about. The content is part of the key, not
+# just the name: every manual input carries the same name ("manual-input", or
+# "Manual input 1"), so keying on the name alone made a second run overwrite the
+# stored text of the first one while its triples stayed attached to it.
+# Re-running the same text — another extractor, or the same one twice — still
+# lands on the same id, so the extractors keep merging into a single record.
+def _build_file_id(file_name: str, text: str) -> str:
+    key = f"{file_name}\0{text}"
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
 # Extracts triples from a text, scores them heuristically, saves them and returns the result
 async def build_extraction_response(
     text: str,
@@ -247,7 +258,7 @@ async def build_extraction_response(
     save_triples(
         triples=triples,
         file_name=file_name,
-        file_id=hashlib.sha256(file_name.encode()).hexdigest()[:16],
+        file_id=_build_file_id(file_name, text),
         extractor=extractor,
         text=text,
     )

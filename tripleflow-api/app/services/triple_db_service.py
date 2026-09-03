@@ -1,17 +1,18 @@
-"""  
+"""
 Software Name : Tripleflow
 SPDX-FileCopyrightText: Copyright (c) Orange SA
 SPDX-License-Identifier: MIT
- 
+
 This software is distributed under the MIT License,
 see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
- 
+
 Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 
 """
 
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from bson import ObjectId
@@ -28,24 +29,59 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _triple_part_filter(field: str, part: dict) -> dict | None:
+    """
+    Matches one component of a triple the way build_triple_id identifies it: on
+    its ID when it has one, on its label otherwise. An unlinked component only
+    matches another unlinked one, so a fact whose entities were resolved stays
+    distinct from one where they were not.
+
+    Returns None when the component carries neither, leaving it unmatchable.
+    """
+    part = part or {}
+    part_id = (part.get("id") or "").strip()
+
+    if part_id:
+        return {f"{field}.id": part_id}
+
+    label = (part.get("label") or "").strip()
+    if not label:
+        return None
+
+    return {
+        f"{field}.id": {"$in": ["", None]},
+        f"{field}.label": {
+            "$regex": f"^{re.escape(label)}$",
+            "$options": "i",
+        },
+    }
+
+
 def _find_existing_triple(
     subject: dict, predicate: dict, obj: dict
 ) -> dict | None:
-    """Looks for a triple with the same subject, predicate and object IDs in the DB."""
-    subject_id = (subject.get("id") or "").strip()
-    predicate_id = (predicate.get("id") or "").strip()
-    obj_id = (obj.get("id") or "").strip()
+    """
+    Looks for the triple already holding this fact, so a second extraction adds
+    its extractor and its passage to it instead of storing the fact twice.
 
-    if not (subject_id and predicate_id and obj_id):
+    Matching on IDs alone was not enough: an extractor that resolves none of its
+    entities produced a new row every run, and those rows shared the triple_id
+    the review and the publication act on.
+    """
+    clauses = [
+        _triple_part_filter("subject", subject),
+        _triple_part_filter("predicate", predicate),
+        _triple_part_filter("obj", obj),
+    ]
+
+    if any(clause is None for clause in clauses):
         return None
 
-    return triples_collection.find_one(
-        {
-            "subject.id": subject_id,
-            "predicate.id": predicate_id,
-            "obj.id": obj_id,
-        }
-    )
+    query: dict = {}
+    for clause in clauses:
+        query.update(clause)
+
+    return triples_collection.find_one(query)
 
 
 def _find_matching_triple(
@@ -71,9 +107,18 @@ def _find_matching_triple(
             return None
         query = {
             "_id": {"$ne": exclude_id},
-            "subject.label": {"$regex": f"^{re.escape(s_label)}$", "$options": "i"},
-            "predicate.label": {"$regex": f"^{re.escape(p_label)}$", "$options": "i"},
-            "obj.label": {"$regex": f"^{re.escape(o_label)}$", "$options": "i"},
+            "subject.label": {
+                "$regex": f"^{re.escape(s_label)}$",
+                "$options": "i",
+            },
+            "predicate.label": {
+                "$regex": f"^{re.escape(p_label)}$",
+                "$options": "i",
+            },
+            "obj.label": {
+                "$regex": f"^{re.escape(o_label)}$",
+                "$options": "i",
+            },
         }
 
     return triples_collection.find_one(query)
@@ -92,21 +137,25 @@ def _merge_into(
     source_occurrences = source.get("source", {}).get("occurrences", [])
     merged_history = sorted(
         target.get("history", []) + source.get("history", []),
-        key=lambda h: h.get("timestamp", datetime.min.replace(tzinfo=timezone.utc)),
+        key=lambda h: h.get(
+            "timestamp", datetime.min.replace(tzinfo=timezone.utc)
+        ),
     )
-    merged_history.append({
-        "action": status,
-        "user_id": user_id,
-        "user_name": user_name,
-        "timestamp": now_utc(),
-        "comments": comment,
-        "previous_value": {
-            "subject": target.get("subject"),
-            "predicate": target.get("predicate"),
-            "obj": target.get("obj"),
-            "status": target.get("status"),
-        },
-    })
+    merged_history.append(
+        {
+            "action": status,
+            "user_id": user_id,
+            "user_name": user_name,
+            "timestamp": now_utc(),
+            "comments": comment,
+            "previous_value": {
+                "subject": target.get("subject"),
+                "predicate": target.get("predicate"),
+                "obj": target.get("obj"),
+                "status": target.get("status"),
+            },
+        }
+    )
 
     triples_collection.update_one(
         {"_id": target["_id"]},
@@ -148,6 +197,34 @@ def _build_occurrence(
     }
 
 
+def _file_already_linked(existing: dict, file_id: str) -> bool:
+    """True when the triple already has an occurrence or origin from this file."""
+    source = existing.get("source") or {}
+    if source.get("file_id") == file_id:
+        return True
+    return any(
+        occ.get("file_id") == file_id for occ in source.get("occurrences", [])
+    )
+
+
+def _unique_triple_id(triple_id: str | None) -> str | None:
+    """
+    Keeps triple_id unique across the collection. Uses a random suffix on
+    collision instead of an incremental scan, so concurrent inserts cannot
+    race to the same id.
+    """
+    if not triple_id:
+        return triple_id
+
+    if (
+        triples_collection.find_one({"triple_id": triple_id}, {"_id": 1})
+        is None
+    ):
+        return triple_id
+
+    return f"{triple_id}-{uuid.uuid4().hex[:8]}"
+
+
 def save_triples(
     triples: list[dict],
     file_name: str,
@@ -175,14 +252,40 @@ def save_triples(
             if occurrence is not None:
                 additions["source.occurrences"] = occurrence
 
+            update_ops: dict = {"$addToSet": additions}
+
+            # A reviewed triple re-extracted from a new file is an independent
+            # source that deserves a fresh review.
+            existing_status = existing.get("status")
+            if existing_status != "pending" and not _file_already_linked(
+                existing, file_id
+            ):
+                update_ops["$set"] = {"status": "pending"}
+                update_ops.setdefault("$push", {})["history"] = {
+                    "action": "reopened",
+                    "user_id": None,
+                    "user_name": None,
+                    "timestamp": now_utc(),
+                    "comments": f"Re-extracted from a new source ({file_name}), reset to pending.",
+                    "previous_value": {
+                        "subject": existing.get("subject"),
+                        "predicate": existing.get("predicate"),
+                        "obj": existing.get("obj"),
+                        "status": existing_status,
+                    },
+                }
+
             triples_collection.update_one(
                 {"_id": existing["_id"]},
-                {"$addToSet": additions},
+                update_ops,
             )
             affected_ids.append(str(existing["_id"]))
         else:
+            # Written back onto the triple because the extraction response hands
+            # this same object to the browser, which then reviews it by id.
+            triple["triple_id"] = _unique_triple_id(triple.get("triple_id"))
             doc = {
-                "triple_id": triple.get("triple_id"),
+                "triple_id": triple["triple_id"],
                 "subject": subject,
                 "predicate": predicate,
                 "obj": obj,
@@ -191,7 +294,9 @@ def save_triples(
                     "file_id": file_id,
                     "extractors": [extractor],
                     "extraction_date": now_utc(),
-                    "occurrences": [occurrence] if occurrence is not None else [],
+                    "occurrences": (
+                        [occurrence] if occurrence is not None else []
+                    ),
                 },
                 "heuristic_score": triple.get("heuristic_score"),
                 "status": "pending",
@@ -222,6 +327,31 @@ def save_triples(
     return affected_ids
 
 
+def _available_file_name(file_name: str, file_id: str) -> str:
+    """
+    Returns a display name no other document is already using. Distinct records
+    can legitimately share a name — every manual input is called "manual-input" —
+    but showing the reviewer several identical rows makes them impossible to tell
+    apart, so the later ones get a numeric suffix.
+    """
+    taken = files_collection.find_one(
+        {"file_name": file_name, "file_id": {"$ne": file_id}}, {"_id": 1}
+    )
+    if taken is None:
+        return file_name
+
+    suffix = 2
+    while (
+        files_collection.find_one(
+            {"file_name": f"{file_name} ({suffix})"}, {"_id": 1}
+        )
+        is not None
+    ):
+        suffix += 1
+
+    return f"{file_name} ({suffix})"
+
+
 def _save_file(
     file_id: str,
     file_name: str,
@@ -230,17 +360,29 @@ def _save_file(
     text: str | None = None,
 ) -> None:
     """Saves or updates a file record in the DB with the extractor and triple count."""
-    set_fields: dict = {"file_name": file_name}
+    set_fields: dict = {}
     if text is not None:
         set_fields["text"] = text
+
+    insert_fields: dict = {
+        "extraction_date": now_utc(),
+        # Only written when the record is created, so re-extracting a document
+        # keeps the name it is already known under — including one the reviewer
+        # set from "Manage files".
+        "file_name": _available_file_name(file_name, file_id),
+    }
+
+    update: dict = {
+        "$setOnInsert": insert_fields,
+        "$addToSet": {"extractors": extractor},
+        "$inc": {"triple_count": triple_count},
+    }
+    if set_fields:
+        update["$set"] = set_fields
+
     files_collection.update_one(
         {"file_id": file_id},
-        {
-            "$set": set_fields,
-            "$setOnInsert": {"extraction_date": now_utc()},
-            "$addToSet": {"extractors": extractor},
-            "$inc": {"triple_count": triple_count},
-        },
+        update,
         upsert=True,
     )
 
@@ -265,22 +407,30 @@ def rename_file(file_id: str, file_name: str) -> dict:
     if not name:
         raise ValueError("File name is required")
 
-    result = files_collection.update_one(
+    old_doc = files_collection.find_one_and_update(
         {"file_id": file_id}, {"$set": {"file_name": name}}
     )
 
-    if result.matched_count == 0:
+    if old_doc is None:
         raise ValueError(f"File '{file_id}' not found")
 
-    triples_collection.update_many(
-        {"source.file_id": file_id},
-        {"$set": {"source.file_name": name}},
-    )
-    triples_collection.update_many(
-        {"source.occurrences.file_id": file_id},
-        {"$set": {"source.occurrences.$[occurrence].file_name": name}},
-        array_filters=[{"occurrence.file_id": file_id}],
-    )
+    old_name = old_doc.get("file_name", "")
+
+    try:
+        triples_collection.update_many(
+            {"source.file_id": file_id},
+            {"$set": {"source.file_name": name}},
+        )
+        triples_collection.update_many(
+            {"source.occurrences.file_id": file_id},
+            {"$set": {"source.occurrences.$[occurrence].file_name": name}},
+            array_filters=[{"occurrence.file_id": file_id}],
+        )
+    except Exception:
+        files_collection.update_one(
+            {"file_id": file_id}, {"$set": {"file_name": old_name}}
+        )
+        raise
 
     return {"file_id": file_id, "file_name": name}
 
@@ -482,8 +632,17 @@ def _detach_file_from_triples(file_id: str) -> int:
         {"$pull": {"source.occurrences": {"file_id": file_id}}},
     )
 
-    deleted = 0
+    # Atomically delete triples whose only source was this file.
+    delete_result = triples_collection.delete_many(
+        {
+            "source.file_id": file_id,
+            "source.occurrences": {"$size": 0},
+        }
+    )
+    deleted = delete_result.deleted_count
 
+    # Re-home triples that were primarily attached to this file but still
+    # have occurrences from other files.
     for triple in triples_collection.find({"source.file_id": file_id}):
         remaining = (triple.get("source") or {}).get("occurrences") or []
 
@@ -493,11 +652,13 @@ def _detach_file_from_triples(file_id: str) -> int:
             continue
 
         fallback = remaining[0]
-        extractors = sorted({
-            occurrence["extractor"]
-            for occurrence in remaining
-            if occurrence.get("extractor")
-        })
+        extractors = sorted(
+            {
+                occurrence["extractor"]
+                for occurrence in remaining
+                if occurrence.get("extractor")
+            }
+        )
         updates = {
             "source.file_id": fallback.get("file_id"),
             "source.file_name": fallback.get("file_name"),
@@ -505,7 +666,9 @@ def _detach_file_from_triples(file_id: str) -> int:
         if extractors:
             updates["source.extractors"] = extractors
 
-        triples_collection.update_one({"_id": triple["_id"]}, {"$set": updates})
+        triples_collection.update_one(
+            {"_id": triple["_id"]}, {"$set": updates}
+        )
 
     return deleted
 
@@ -564,9 +727,25 @@ def update_triple_status(
         new_predicate = modified_triple.get("predicate")
         new_obj = modified_triple.get("obj")
 
-        duplicate = _find_matching_triple(new_subject, new_predicate, new_obj, current["_id"])
+        duplicate = _find_matching_triple(
+            new_subject, new_predicate, new_obj, current["_id"]
+        )
         if duplicate:
-            _merge_into(duplicate, current, status, user_id, user_name, comment)
+            # Keep current (the one the frontend tracks), absorb duplicate.
+            _merge_into(
+                current, duplicate, status, user_id, user_name, comment
+            )
+            triples_collection.update_one(
+                {"_id": current["_id"]},
+                {
+                    "$set": {
+                        "subject": new_subject,
+                        "predicate": new_predicate,
+                        "obj": new_obj,
+                        "modified_triple": modified_triple,
+                    }
+                },
+            )
             return True
 
     set_fields = {
