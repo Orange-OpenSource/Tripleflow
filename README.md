@@ -41,15 +41,19 @@ cp tripleflow-front/.env.template tripleflow-front/.env.local
 
 1. Dependency installation
 
+We recommend a virtual environment to avoid dependency conflicts.
+
 ```bash
-cd tripleflow-api && python3 -m pip install -r requirements.txt
+cd tripleflow-api && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 ```
 
 ```bash
 cd tripleflow-front && npm install
 ```
 
-2. Launch app
+1. Launch app
+
+Run each service in its own terminal, so the API and the front-end stay up at the same time (MongoDB must already be running too):
 
 ```bash
 cd tripleflow-api && uvicorn app.main:app
