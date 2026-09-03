@@ -1,13 +1,13 @@
-"""  
+"""
 Software Name : Tripleflow
 SPDX-FileCopyrightText: Copyright (c) Orange SA
 SPDX-License-Identifier: MIT
- 
+
 This software is distributed under the MIT License,
 see the "LICENSE" file for more details or https://spdx.org/licenses/MIT.html
- 
+
 Authors: Sonia Hadjab, Antoine Py, Yoan Chabot
-Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.  
+Software description: Tripleflow is a tool that enables semi-supervised data feeding of knowledge graphs from unstructured documents.
 
 """
 
@@ -31,9 +31,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Comma-separated list of allowed front-end origins; deployment-specific hosts
 # belong in the CORS_ORIGINS env var, not in code.
+# An empty/unset value falls back to the local dev origins, so a blank
+# CORS_ORIGINS= copied from the template does not lock out the front-end.
 ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    for origin in (
+        os.getenv("CORS_ORIGINS")
+        or "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
     if origin.strip()
 ]
 
